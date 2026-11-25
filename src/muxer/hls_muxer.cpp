@@ -6,6 +6,7 @@ extern "C" {
 }
 
 #include <algorithm>
+#include <filesystem>
 #include <system_error>
 
 /// @file hls_muxer.cpp
@@ -27,21 +28,19 @@ namespace streamer {
 
 namespace {
 
-void populate_hls_options(AVDictionary **opts, const Config &cfg,
-                          int start_segment_num,
-                          const std::string &init_filename,
-                          bool append_discontinuity) {
+void populate_hls_options(AVDictionary **opts,
+    const Config                        &cfg,
+    int                                  start_segment_num,
+    const std::string                   &init_filename,
+    bool                                 append_discontinuity) {
   const std::string seg_pattern =
       (std::filesystem::path(cfg.hls_output_dir) / "seg_%06d.m4s").string();
-  const std::string seg_duration =
-      std::to_string(std::max(1, cfg.hls_segment_duration));
-  const std::string list_size =
-      std::to_string(std::max(1, cfg.hls_live_list_size));
-  const std::string start_num = std::to_string(std::max(0, start_segment_num));
-  const char *flags =
-      append_discontinuity
-          ? "independent_segments+discont_start+append_list+temp_file"
-          : "independent_segments+discont_start+temp_file";
+  const std::string seg_duration = std::to_string(std::max(1, cfg.hls_segment_duration));
+  const std::string list_size    = std::to_string(std::max(1, cfg.hls_live_list_size));
+  const std::string start_num    = std::to_string(std::max(0, start_segment_num));
+  const char       *flags        = append_discontinuity
+      ? "independent_segments+discont_start+append_list+temp_file"
+      : "independent_segments+discont_start+temp_file";
 
   av_dict_set(opts, "hls_segment_type", "fmp4", 0);
   av_dict_set(opts, "hls_fmp4_init_filename", init_filename.c_str(), 0);
@@ -54,25 +53,25 @@ void populate_hls_options(AVDictionary **opts, const Config &cfg,
 
 } //< namespace
 
-HlsMuxer::HlsMuxer(const Config &cfg) : cfg_(cfg) {}
+HlsMuxer::HlsMuxer(const Config &cfg)
+    : cfg_(cfg) {}
 
-HlsMuxer::~HlsMuxer() { close(); }
+HlsMuxer::~HlsMuxer() {
+  close();
+}
 
 bool HlsMuxer::init_hls_output(int init_epoch, std::string &err) {
   std::error_code ec;
   std::filesystem::create_directories(cfg_.hls_output_dir, ec);
   if (ec) {
-    err = "Failed to create HLS output directory '" + cfg_.hls_output_dir +
-          "': " + ec.message();
+    err = "Failed to create HLS output directory '" + cfg_.hls_output_dir + "': " + ec.message();
     return false;
   }
 
-  const std::string out_path =
-      (std::filesystem::path(cfg_.hls_output_dir) / "live.m3u8").string();
+  const std::string out_path = (std::filesystem::path(cfg_.hls_output_dir) / "live.m3u8").string();
 
   AVFormatContext *raw_out = nullptr;
-  const int ret = avformat_alloc_output_context2(&raw_out, nullptr, "hls",
-                                                 out_path.c_str());
+  const int        ret = avformat_alloc_output_context2(&raw_out, nullptr, "hls", out_path.c_str());
   if (ret < 0 || !raw_out) {
     err = "avformat_alloc_output_context2(hls) failed: " + av_err_str(ret);
     return false;
@@ -84,19 +83,21 @@ bool HlsMuxer::init_hls_output(int init_epoch, std::string &err) {
   return true;
 }
 
-bool HlsMuxer::open_remux(const AVStream *in_stream, int start_segment_num,
-                          int init_epoch, bool append_discontinuity,
-                          std::string &err) {
+bool HlsMuxer::open_remux(const AVStream *in_stream,
+    int                                   start_segment_num,
+    int                                   init_epoch,
+    bool                                  append_discontinuity,
+    std::string                          &err) {
   if (!in_stream || !in_stream->codecpar) {
     err = "Invalid input stream for HLS remux";
     return false;
   }
 
   close();
-  remux_mode_ = true;
+  remux_mode_   = true;
   first_in_pts_ = AV_NOPTS_VALUE;
   first_in_dts_ = AV_NOPTS_VALUE;
-  last_dts_ = AV_NOPTS_VALUE;
+  last_dts_     = AV_NOPTS_VALUE;
   saw_keyframe_ = false;
 
   if (!init_hls_output(init_epoch, err)) {
@@ -120,11 +121,10 @@ bool HlsMuxer::open_remux(const AVStream *in_stream, int start_segment_num,
   /// Clear source container tag so fMP4 muxer writes ISO BMFF-compatible codec
   /// tags.
   out_stream_->codecpar->codec_tag = 0;
-  out_stream_->time_base = in_stream->time_base;
+  out_stream_->time_base           = in_stream->time_base;
 
   AVDictionary *raw_opts = nullptr;
-  populate_hls_options(&raw_opts, cfg_, start_segment_num, init_filename_,
-                       append_discontinuity);
+  populate_hls_options(&raw_opts, cfg_, start_segment_num, init_filename_, append_discontinuity);
   ret = avformat_write_header(fmt_ctx_.get(), &raw_opts);
   AVDictionaryPtr opts_cleanup(raw_opts);
   if (ret < 0) {
@@ -146,18 +146,22 @@ bool HlsMuxer::open_remux(const AVStream *in_stream, int start_segment_num,
   return true;
 }
 
-bool HlsMuxer::open_transcode(int width, int height, int fps,
-                              int start_segment_num, int init_epoch,
-                              bool append_discontinuity, std::string &err) {
+bool HlsMuxer::open_transcode(int width,
+    int                           height,
+    int                           fps,
+    int                           start_segment_num,
+    int                           init_epoch,
+    bool                          append_discontinuity,
+    std::string                  &err) {
   if (width <= 0 || height <= 0) {
     err = "Invalid frame dimensions for HLS transcode";
     return false;
   }
 
   close();
-  remux_mode_ = false;
-  next_pts_ = 0;
-  last_dts_ = AV_NOPTS_VALUE;
+  remux_mode_   = false;
+  next_pts_     = 0;
+  last_dts_     = AV_NOPTS_VALUE;
   first_in_pts_ = AV_NOPTS_VALUE;
   first_in_dts_ = AV_NOPTS_VALUE;
   saw_keyframe_ = false;
@@ -184,16 +188,16 @@ bool HlsMuxer::open_transcode(int width, int height, int fps,
   }
 
   const int safe_fps = std::max(1, fps);
-  const int gop = safe_fps * std::max(1, cfg_.hls_segment_duration);
+  const int gop      = safe_fps * std::max(1, cfg_.hls_segment_duration);
 
-  enc_ctx_->width = width;
-  enc_ctx_->height = height;
-  enc_ctx_->pix_fmt = AV_PIX_FMT_YUV420P;
-  enc_ctx_->time_base = AVRational{1, safe_fps};
-  enc_ctx_->framerate = AVRational{safe_fps, 1};
-  enc_ctx_->gop_size = gop;
+  enc_ctx_->width        = width;
+  enc_ctx_->height       = height;
+  enc_ctx_->pix_fmt      = AV_PIX_FMT_YUV420P;
+  enc_ctx_->time_base    = AVRational{1, safe_fps};
+  enc_ctx_->framerate    = AVRational{safe_fps, 1};
+  enc_ctx_->gop_size     = gop;
   enc_ctx_->max_b_frames = 0;
-  enc_ctx_->bit_rate = static_cast<int64_t>(cfg_.encoder_bitrate_kbps) * 1000;
+  enc_ctx_->bit_rate     = static_cast<int64_t>(cfg_.encoder_bitrate_kbps) * 1000;
   if (cfg_.encoder_threads > 0) {
     enc_ctx_->thread_count = cfg_.encoder_threads;
   }
@@ -205,13 +209,12 @@ bool HlsMuxer::open_transcode(int width, int height, int fps,
   if (encoder->name && std::string(encoder->name) == "libx264") {
     av_dict_set(&raw_enc_opts, "preset", cfg_.encoder_preset.c_str(), 0);
     av_dict_set(&raw_enc_opts, "tune", "zerolatency", 0);
-    const std::string x264_params = "keyint=" + std::to_string(gop) +
-                                    ":min-keyint=" + std::to_string(gop) +
-                                    ":scenecut=0";
+    const std::string x264_params =
+        "keyint=" + std::to_string(gop) + ":min-keyint=" + std::to_string(gop) + ":scenecut=0";
     av_dict_set(&raw_enc_opts, "x264-params", x264_params.c_str(), 0);
   }
 
-  int ret = avcodec_open2(enc_ctx_.get(), encoder, &raw_enc_opts);
+  int             ret = avcodec_open2(enc_ctx_.get(), encoder, &raw_enc_opts);
   AVDictionaryPtr enc_opts_cleanup(raw_enc_opts);
   if (ret < 0) {
     err = "avcodec_open2 failed: " + av_err_str(ret);
@@ -239,8 +242,8 @@ bool HlsMuxer::open_transcode(int width, int height, int fps,
   out_stream_->time_base = enc_ctx_->time_base;
 
   AVDictionary *raw_hls_opts = nullptr;
-  populate_hls_options(&raw_hls_opts, cfg_, start_segment_num, init_filename_,
-                       append_discontinuity);
+  populate_hls_options(
+      &raw_hls_opts, cfg_, start_segment_num, init_filename_, append_discontinuity);
   ret = avformat_write_header(fmt_ctx_.get(), &raw_hls_opts);
   AVDictionaryPtr hls_opts_cleanup(raw_hls_opts);
   if (ret < 0) {
@@ -264,8 +267,7 @@ bool HlsMuxer::open_transcode(int width, int height, int fps,
   return true;
 }
 
-bool HlsMuxer::write_remux_packet(AVPacket *pkt, const AVRational &in_time_base,
-                                  std::string &err) {
+bool HlsMuxer::write_remux_packet(AVPacket *pkt, const AVRational &in_time_base, std::string &err) {
   if (!fmt_ctx_ || !out_stream_ || !remux_mode_ || !enc_pkt_) {
     err = "HlsMuxer is not open in remux mode";
     return false;
@@ -301,8 +303,8 @@ bool HlsMuxer::write_remux_packet(AVPacket *pkt, const AVRational &in_time_base,
 
   const int64_t rel_dts = in_dts - first_in_dts_;
   const int64_t rel_pts = in_pts - first_in_dts_;
-  int64_t dts = av_rescale_q(rel_dts, in_time_base, out_stream_->time_base);
-  int64_t pts = av_rescale_q(rel_pts, in_time_base, out_stream_->time_base);
+  int64_t       dts     = av_rescale_q(rel_dts, in_time_base, out_stream_->time_base);
+  int64_t       pts     = av_rescale_q(rel_pts, in_time_base, out_stream_->time_base);
 
   if (last_dts_ != AV_NOPTS_VALUE && dts <= last_dts_) {
     dts = last_dts_ + 1;
@@ -315,10 +317,8 @@ bool HlsMuxer::write_remux_packet(AVPacket *pkt, const AVRational &in_time_base,
   enc_pkt_->dts = dts;
   enc_pkt_->pts = pts;
   enc_pkt_->duration =
-      (pkt->duration > 0)
-          ? av_rescale_q(pkt->duration, in_time_base, out_stream_->time_base)
-          : 0;
-  enc_pkt_->pos = -1;
+      (pkt->duration > 0) ? av_rescale_q(pkt->duration, in_time_base, out_stream_->time_base) : 0;
+  enc_pkt_->pos          = -1;
   enc_pkt_->stream_index = out_stream_->index;
 
   ret = av_interleaved_write_frame(fmt_ctx_.get(), enc_pkt_.get());
@@ -363,8 +363,7 @@ bool HlsMuxer::drain_encoder(std::string &err) {
     if (enc_pkt_->duration <= 0) {
       enc_pkt_->duration = 1;
     }
-    av_packet_rescale_ts(enc_pkt_.get(), enc_ctx_->time_base,
-                         out_stream_->time_base);
+    av_packet_rescale_ts(enc_pkt_.get(), enc_ctx_->time_base, out_stream_->time_base);
     if (enc_pkt_->dts == AV_NOPTS_VALUE) {
       enc_pkt_->dts = (last_dts_ == AV_NOPTS_VALUE) ? 0 : (last_dts_ + 1);
     } else if (last_dts_ != AV_NOPTS_VALUE && enc_pkt_->dts <= last_dts_) {
@@ -375,7 +374,7 @@ bool HlsMuxer::drain_encoder(std::string &err) {
     }
     last_dts_ = enc_pkt_->dts;
 
-    enc_pkt_->pos = -1;
+    enc_pkt_->pos          = -1;
     enc_pkt_->stream_index = out_stream_->index;
 
     ret = av_interleaved_write_frame(fmt_ctx_.get(), enc_pkt_.get());
@@ -401,10 +400,10 @@ void HlsMuxer::close() {
   enc_pkt_.reset();
   enc_ctx_.reset();
   fmt_ctx_.reset();
-  out_stream_ = nullptr;
-  remux_mode_ = false;
-  next_pts_ = 0;
-  last_dts_ = AV_NOPTS_VALUE;
+  out_stream_   = nullptr;
+  remux_mode_   = false;
+  next_pts_     = 0;
+  last_dts_     = AV_NOPTS_VALUE;
   first_in_pts_ = AV_NOPTS_VALUE;
   first_in_dts_ = AV_NOPTS_VALUE;
   saw_keyframe_ = false;

@@ -82,14 +82,13 @@ struct AVDictionaryDeleter {
   }
 };
 
-using AVFormatInputPtr = std::unique_ptr<AVFormatContext, AVFormatInputDeleter>;
-using AVFormatOutputPtr =
-    std::unique_ptr<AVFormatContext, AVFormatOutputDeleter>;
-using AVCodecCtxPtr = std::unique_ptr<AVCodecContext, AVCodecCtxDeleter>;
-using AVFramePtr = std::unique_ptr<AVFrame, AVFrameDeleter>;
-using AVPacketPtr = std::unique_ptr<AVPacket, AVPacketDeleter>;
-using SwsCtxPtr = std::unique_ptr<SwsContext, SwsCtxDeleter>;
-using AVDictionaryPtr = std::unique_ptr<AVDictionary, AVDictionaryDeleter>;
+using AVFormatInputPtr  = std::unique_ptr<AVFormatContext, AVFormatInputDeleter>;
+using AVFormatOutputPtr = std::unique_ptr<AVFormatContext, AVFormatOutputDeleter>;
+using AVCodecCtxPtr     = std::unique_ptr<AVCodecContext, AVCodecCtxDeleter>;
+using AVFramePtr        = std::unique_ptr<AVFrame, AVFrameDeleter>;
+using AVPacketPtr       = std::unique_ptr<AVPacket, AVPacketDeleter>;
+using SwsCtxPtr         = std::unique_ptr<SwsContext, SwsCtxDeleter>;
+using AVDictionaryPtr   = std::unique_ptr<AVDictionary, AVDictionaryDeleter>;
 
 inline std::string av_err_str(int errnum) {
   char buf[AV_ERROR_MAX_STRING_SIZE] = {0};
@@ -99,13 +98,13 @@ inline std::string av_err_str(int errnum) {
 
 inline int64_t now_steady_ms() {
   return std::chrono::duration_cast<std::chrono::milliseconds>(
-             std::chrono::steady_clock::now().time_since_epoch())
+      std::chrono::steady_clock::now().time_since_epoch())
       .count();
 }
 
 inline int64_t now_epoch_ms() {
   return std::chrono::duration_cast<std::chrono::milliseconds>(
-             std::chrono::system_clock::now().time_since_epoch())
+      std::chrono::system_clock::now().time_since_epoch())
       .count();
 }
 

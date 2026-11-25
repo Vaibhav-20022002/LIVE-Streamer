@@ -38,50 +38,58 @@ An end-to-end, pure C++20 **Libav** (`libavformat` / `libavcodec` / `libavdevice
 
 ## 2. Architecture Diagram
 
-```mermaid
-graph TD
-    subgraph Input Sources
-        RTSP[RTSP Stream / IP Camera]
-        V4L2[Linux V4L2 Webcam]
-        AVF[macOS AVFoundation]
-        LAVFI[Lavfi Test Source]
-        FILE[Local MP4 File]
-    end
-
-    subgraph C++ Core Engine
-        AVIO[AVIOInterruptCB & Reconnect Logic] --> Demux[Libav Demuxer]
-        Demux --> Dec[Libav Decoder / Packet Parser]
-        
-        Dec --> ModeCheck{Smart Pass-Through?}
-        ModeCheck -- Yes (Remux) --> MuxHLS[HLS fMP4 Muxer]
-        ModeCheck -- No (Transcode/AI) --> Trans[libx264 Encoder]
-        
-        Dec --> Ring[Drop-Oldest Ring Buffer]
-        Ring --> AI[ONNX Runtime YOLOv8n]
-        AI --> Post[Post-Process / NMS]
-        Post --> Events[events.json & Telemetry]
-        Post --> Overlay[YUV420P BBox Overlay]
-        Overlay --> Trans
-        
-        Trans --> MuxHLS
-    end
-
-    subgraph Storage & Serving
-        MuxHLS --> Disk["/data/hls (Live & DVR Segments)"]
-        Disk --> Nginx[Nginx HTTP Server :8999]
-    end
-
-    subgraph Web Client
-        Nginx --> HLSJS[HLS.js Player]
-        Nginx --> Stats[Live Telemetry stats.json]
-        Nginx --> Search[Enhanced Object Search & Click-to-Seek DVR]
-    end
-
-    RTSP --> AVIO
-    V4L2 --> AVIO
-    AVF --> AVIO
-    LAVFI --> AVIO
-    FILE --> AVIO
+```text
++------------------------------------------------------------------------------+
+|                                INPUT SOURCES                                 |
+|   [ RTSP Camera ]  [ V4L2 Webcam ]  [ AVFoundation ]  [ Lavfi ]  [ MP4 File ] |
++---------------------------------------+--------------------------------------+
+                                        |
+                                        v
++------------------------------------------------------------------------------+
+|                            C++20 CORE ENGINE                                 |
+|                                                                              |
+|  +-----------------------+     +-----------------+     +------------------+  |
+|  | AVIOInterruptCB &     | --> | Libav Demuxer   | --> | Libav Decoder /  |  |
+|  | Backoff Reconnect     |     | (libavformat)   |     | Packet Parser    |  |
+|  +-----------------------+     +-----------------+     +--------+---------+  |
+|                                                                 |            |
+|          +------------------------------------------------------+            |
+|          | Smart Pass-Through?                                               |
+|          |                                                                   |
+|          +-- YES (Remux) -----------------------------------------+          |
+|          |                                                        |          |
+|          +-- NO (Transcode / AI Enabled) --+                      v          |
+|                                            |              +---------------+  |
+|  +------------------------+                |              | HLS-fMP4      |  |
+|  | Drop-Oldest RingBuffer | <--------------+              | Muxer         |  |
+|  | (capacity = 2)         |                |              | (init + .m4s) |  |
+|  +-----------+------------+                |              +-------+-------+  |
+|              |                             v                      ^          |
+|              v                     +---------------+              |          |
+|  +------------------------+        | YUV420P       |     +--------+-------+  |
+|  | ONNX Runtime YOLOv8n   | -----> | Direct BBox   | --> | libx264        |  |
+|  | & Class-Wise NMS       |  det   | Overlay       |     | Encoder        |  |
+|  +-----------+------------+        +---------------+     +----------------+  |
+|              |                                                               |
+|              +--> [ events.json & stats.json (Atomic Telemetry) ]            |
++---------------------------------------+--------------------------------------+
+                                        |
+                                        v
++------------------------------------------------------------------------------+
+|                            STORAGE & HTTP SERVING                            |
+|   /data/hls (live.m3u8, playback.m3u8, init_*.mp4, seg_*.m4s, *.json)        |
+|                                       |                                      |
+|                                       v                                      |
+|                         [ Nginx HTTP Server (:8999) ]                        |
++---------------------------------------+--------------------------------------+
+                                        |
+                                        v
++------------------------------------------------------------------------------+
+|                                 WEB CLIENT                                   |
+|  * HLS.js Player (Live & DVR Playback + Stall/Network Auto-Recovery)         |
+|  * Read-Only Telemetry Bar (stats.json)                                      |
+|  * Enhanced Object Search & Click-to-Seek DVR (events.json)                  |
++------------------------------------------------------------------------------+
 ```
 
 ---

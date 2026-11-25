@@ -25,18 +25,37 @@ CustomStreamer intentionally rejects RTMP, MPEG-TS, WebRTC, and MediaMTX in favo
 ### 2.2 Smart Pass-Through vs. Conditional Transcoding
 To optimize CPU utilization, CustomStreamer evaluates each incoming stream's codec and resolution:
 
-```mermaid
-flowchart TD
-    A[RTSP / Camera Stream Ingest] --> B{AI Enabled?}
-    B -- No --> C{Codec = H.264 / HEVC?}
-    C -- Yes --> D[Smart Remux Path: Zero-Decode Stream Copy]
-    C -- No --> E[Transcode Path: libx264 ultrafast]
-    B -- Yes --> F[Decode to AVFrame YUV420P]
-    F --> G[ONNX Runtime YOLOv8n Inference]
-    G --> H[YUV420P Direct Bitmap Overlay]
-    H --> E
-    D --> I[HLS fMP4 Segmenter]
-    E --> I
+```text
++--------------------------------+
+| RTSP / Camera Stream Ingest    |
++---------------+----------------+
+                |
+                v
+         [ AI Enabled? ]
+          /           \
+       (No)           (Yes)
+        /               \
+       v                 v
+[ Codec H.264/HEVC? ]   [ Decode to AVFrame (YUV420P) ]
+     /        \                   |
+  (Yes)       (No)                v
+   /            \       [ ONNX Runtime YOLOv8n Inference ]
+  v              |                |
+[ Smart Remux ]  |                v
+[ (Zero-Copy) ]  |      [ YUV420P Direct Bitmap Overlay ]
+  |              |                |
+  |              +-------+--------+
+  |                      |
+  |                      v
+  |              [ libx264 Transcode ]
+  |              [ (preset=ultrafast) ]
+  |                      |
+  +----------+-----------+
+             |
+             v
+    +------------------+
+    | HLS-fMP4 Muxer   |
+    +------------------+
 ```
 
 1. **Smart Remux Path (`AI_ENABLED=false` + Compatible Codec)**: Packets are demuxed and directly remuxed into fMP4 fragments with zero decode/encode cycles, burning near-zero CPU.
@@ -55,16 +74,19 @@ The storage engine maintains a strict separation between live rolling fragments 
 ### 3.1 Decoupled Ring Buffer & ONNX Runtime Pipeline
 To prevent inference bottlenecks from stalling the capture pipeline, CustomStreamer uses a decoupled asynchronous architecture:
 
-```mermaid
-flowchart LR
-    subgraph Ingest Thread
-        A[AVPacket Capture] -->|Push| B[Bounded Ring Buffer capacity=2]
-    end
-    subgraph Inference Worker
-        B -->|Pop latest drop oldest| C[ByteBufferPool YUV->Blob]
-        C -->|Inference| D[ONNX Runtime YOLOv8n 320x320]
-        D -->|Bounding Boxes| E[YUV420P Direct Overlay Engine]
-    end
+```text
++-----------------------------------+      +----------------------------------------------+
+|          INGEST THREAD            |      |               AI WORKER THREAD             |
+|                                   |      |                                              |
+| [ AVPacket Capture & Decode ]     |      | [ ByteBufferPool ] -> [ ONNX YOLOv8n ]       |
+|               |                   |      |                             |                |
+|               v                   |      |                             v                |
+|  (Push RGB/YUV Frame)             |      |                  (Bounding Boxes + Labels)   |
+|               |                   |      |                             |                |
+|               +---> [ Drop-Oldest RingBuffer (cap=2) ] ----------------+                |
+|                                   |      |                             v                |
+|                                   |      |                  [ YUV420P Direct Overlay ]  |
++-----------------------------------+      +----------------------------------------------+
 ```
 
 - **Bounded Ring Buffer (`capacity=2`)**: If inference lags behind real-time (e.g., under high CPU load), older frames are dropped instantly, guaranteeing zero capture lag or TCP window backpressure.
@@ -97,29 +119,19 @@ Standard pipelines convert YUV420P to RGB, draw bounding boxes using Cairo/OpenC
 
 To scale from a single local camera to enterprise deployments with **10,000+ cameras** and **100,000+ concurrent viewers**, CustomStreamer employs a decoupled tier architecture:
 
-```mermaid
-flowchart LR
-    subgraph Ingest Tier [Kubernetes StatefulSet]
-        C1[Camera 1..N] --> P1[Ingest Pod 1: 100 cams]
-        C2[Camera N..M] --> P2[Ingest Pod 2: 100 cams]
-    end
-
-    subgraph Storage & Origin Tier
-        P1 -->|Upload .m4s / .m3u8| S3[(S3 / GCS / NVMe Origin Shield)]
-        P2 --> S3
-    end
-
-    subgraph Delivery Tier
-        S3 --> CDN[Global CDN / Nginx Edge Caches]
-        CDN --> V1[Viewer 1..K]
-    end
-
-    subgraph Metadata Tier
-        P1 -->|Async Events| K[Redis Streams / Kafka]
-        P2 --> K
-        K --> DB[(ClickHouse / TimescaleDB)]
-        DB --> API[Search API Gateway]
-    end
+```text
++----------------------------+     Upload .m4s/.m3u8     +-------------------------+     HTTP/2
+| Ingest Tier (StatefulSet)  | ------------------------> | Storage & Origin Tier   | ------------+
+|                            |                           | (S3 / GCS / NVMe Shield)|             |
+| * Pod 1: Cameras 1..N      |                           +-------------------------+             v
+| * Pod 2: Cameras N..M      |                                                           +---------------+
++-------------+--------------+                                                           | CDN / Nginx   |
+              | Async Events                                                             | Edge Caches   |
+              v                                                                          +-------+-------+
++----------------------------+     +-------------------------+     +-------------------+         |
+| Metadata Messaging         | --> | Object Event Store      | --> | Search API        |         v
+| (Redis Streams / Kafka)    |     | (ClickHouse/TimescaleDB)|     | Gateway           |   [ Viewers 1..K ]
++----------------------------+     +-------------------------+     +-------------------+
 ```
 
 ### Tier Specifications
@@ -130,12 +142,8 @@ flowchart LR
 
 ---
 
-## 6. Trade-offs & Future Work
+## 6. Architectural Trade-offs
 
 ### 6.1 Latency vs. Reliability Trade-off
 - **Current Approach**: Standard HLS-fMP4 with 1-second segments achieves **2–4 seconds** glass-to-glass latency with 100% CDN cache hit rates and zero packet loss artifacts.
 - **Alternative Considered (LL-HLS / WebRTC)**: Low-Latency HLS (partial segments `hive-part`) or WebRTC reduce latency to <1s but introduce significant signaling complexity, unstable UDP packet loss over cellular networks, and destroy standard CDN edge caching efficiency.
-
-### 6.2 Future Roadmap
-- **Amazon Kinesis Video Streams (KVS) Sink**: Add a native GStreamer/KVS Producer SDK output plugin to mirror streams directly to AWS KVS for cloud-native retention and IAM-secured WebRTC viewing.
-- **Hardware Accelerated Transcoding**: Integrate NVENC / NVDEC and VA-API hardware pipelines into the Libav filter graph for high-density 4K multi-stream transcoding.

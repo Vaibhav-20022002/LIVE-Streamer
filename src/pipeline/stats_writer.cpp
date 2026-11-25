@@ -12,37 +12,36 @@ std::string escape_json_string(const std::string &input) {
   output.reserve(input.size() + 2);
   for (unsigned char c : input) {
     switch (c) {
-    case '\"':
-      output += "\\\"";
-      break;
-    case '\\':
-      output += "\\\\";
-      break;
-    case '\b':
-      output += "\\b";
-      break;
-    case '\f':
-      output += "\\f";
-      break;
-    case '\n':
-      output += "\\n";
-      break;
-    case '\r':
-      output += "\\r";
-      break;
-    case '\t':
-      output += "\\t";
-      break;
-    default:
-      if (c < 0x20) {
-        std::ostringstream oss;
-        oss << "\\u00" << std::hex << std::setw(2) << std::setfill('0')
-            << static_cast<int>(c);
-        output += oss.str();
-      } else {
-        output += static_cast<char>(c);
-      }
-      break;
+      case '\"':
+        output += "\\\"";
+        break;
+      case '\\':
+        output += "\\\\";
+        break;
+      case '\b':
+        output += "\\b";
+        break;
+      case '\f':
+        output += "\\f";
+        break;
+      case '\n':
+        output += "\\n";
+        break;
+      case '\r':
+        output += "\\r";
+        break;
+      case '\t':
+        output += "\\t";
+        break;
+      default:
+        if (c < 0x20) {
+          std::ostringstream oss;
+          oss << "\\u00" << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(c);
+          output += oss.str();
+        } else {
+          output += static_cast<char>(c);
+        }
+        break;
     }
   }
   return output;
@@ -57,8 +56,7 @@ std::string escape_json_string(const std::string &input) {
 /// - Fallback: If atomic rename fails across filesystem boundaries, copies file
 /// and removes temp. Guarantee: Nginx or external HTTP polling clients never
 /// observe partial, truncated, or corrupted JSON writes.
-bool write_atomic_file(const std::filesystem::path &path,
-                       const std::string &content) {
+bool write_atomic_file(const std::filesystem::path &path, const std::string &content) {
   std::error_code ec;
   if (path.has_parent_path()) {
     std::filesystem::create_directories(path.parent_path(), ec);
@@ -67,7 +65,7 @@ bool write_atomic_file(const std::filesystem::path &path,
     }
   }
 
-  std::string tmp_path_str = path.string() + ".tmp";
+  std::string           tmp_path_str = path.string() + ".tmp";
   std::filesystem::path tmp_path(tmp_path_str);
 
   {
@@ -98,10 +96,14 @@ bool write_atomic_file(const std::filesystem::path &path,
 
 namespace {
 
-double safe_double(double val) { return std::isfinite(val) ? val : 0.0; }
+double safe_double(double val) {
+  return std::isfinite(val) ? val : 0.0;
+}
 
-void serialize_stage_stats(std::ostringstream &oss, const char *name,
-                           const StageStats &stats, bool add_comma) {
+void serialize_stage_stats(std::ostringstream &oss,
+    const char                                *name,
+    const StageStats                          &stats,
+    bool                                       add_comma) {
   oss << "\"" << name << "\":{"
       << "\"avg_ms\":" << safe_double(stats.avg_ms) << ","
       << "\"p50_ms\":" << safe_double(stats.p50_ms) << ","
@@ -126,7 +128,7 @@ std::string serialize_stats_json(const PipelineMetrics &m) {
   oss << "\"width\":" << m.width << ",";
   oss << "\"height\":" << m.height << ",";
 
-  const double fps_in_val = safe_double(m.fps_in);
+  const double fps_in_val  = safe_double(m.fps_in);
   const double fps_out_val = safe_double(m.fps_out);
   oss << "\"ingest_fps\":" << fps_in_val << ",";
   oss << "\"output_fps\":" << fps_out_val << ",";
@@ -159,8 +161,8 @@ std::string serialize_stats_json(const PipelineMetrics &m) {
         << "\"class_id\":" << det.class_id << ","
         << "\"label\":\"" << escape_json_string(det.label) << "\","
         << "\"confidence\":" << safe_double(det.confidence) << ","
-        << "\"box\":[" << safe_double(det.x1) << "," << safe_double(det.y1)
-        << "," << safe_double(det.x2) << "," << safe_double(det.y2) << "]"
+        << "\"box\":[" << safe_double(det.x1) << "," << safe_double(det.y1) << ","
+        << safe_double(det.x2) << "," << safe_double(det.y2) << "]"
         << "}";
   }
   oss << "],";
@@ -181,10 +183,9 @@ std::string serialize_stats_json(const PipelineMetrics &m) {
   return oss.str();
 }
 
-bool write_stats_json(const std::filesystem::path &hls_dir,
-                      const PipelineMetrics &m) {
+bool write_stats_json(const std::filesystem::path &hls_dir, const PipelineMetrics &m) {
   std::filesystem::path stats_path = hls_dir / "stats.json";
-  std::string json_str = serialize_stats_json(m);
+  std::string           json_str   = serialize_stats_json(m);
   return write_atomic_file(stats_path, json_str);
 }
 

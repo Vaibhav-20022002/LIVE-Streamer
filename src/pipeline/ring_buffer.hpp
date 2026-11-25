@@ -20,7 +20,7 @@ namespace streamer {
 
 /// Thread-safe bounded queue that drops the oldest element on overflow
 /// so real-time producers (capture/decode) never block on slow consumers (AI).
-template <typename T> class DropOldestRingBuffer {
+template<typename T> class DropOldestRingBuffer {
 public:
   explicit DropOldestRingBuffer(size_t capacity)
       : capacity_(capacity > 0 ? capacity : 1) {}
@@ -92,7 +92,7 @@ public:
   void reset() {
     std::lock_guard<std::mutex> lock(mu_);
     queue_.clear();
-    stopped_ = false;
+    stopped_       = false;
     dropped_count_ = 0;
   }
 
@@ -112,12 +112,12 @@ public:
   }
 
 private:
-  size_t capacity_;
-  mutable std::mutex mu_;
+  size_t                  capacity_;
+  mutable std::mutex      mu_;
   std::condition_variable cv_;
-  std::deque<T> queue_;
-  bool stopped_ = false;
-  uint64_t dropped_count_ = 0;
+  std::deque<T>           queue_;
+  bool                    stopped_       = false;
+  uint64_t                dropped_count_ = 0;
 };
 
 } //< namespace streamer

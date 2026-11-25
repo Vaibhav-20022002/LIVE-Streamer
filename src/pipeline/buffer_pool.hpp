@@ -56,14 +56,13 @@ public:
     }
 
     std::weak_ptr<ByteBufferPool> weak_self = weak_from_this();
-    return std::shared_ptr<std::vector<uint8_t>>(
-        raw, [weak_self](std::vector<uint8_t> *ptr) {
-          if (auto self = weak_self.lock()) {
-            self->release(ptr);
-          } else {
-            delete ptr;
-          }
-        });
+    return std::shared_ptr<std::vector<uint8_t>>(raw, [weak_self](std::vector<uint8_t> *ptr) {
+      if (auto self = weak_self.lock()) {
+        self->release(ptr);
+      } else {
+        delete ptr;
+      }
+    });
   }
 
   /// Returns the number of currently available buffers in the free list.
@@ -77,11 +76,11 @@ public:
 
 private:
   ByteBufferPool(size_t buffer_bytes, size_t initial_count, size_t max_count)
-      : buffer_bytes_(buffer_bytes), max_count_(max_count) {
+      : buffer_bytes_(buffer_bytes)
+      , max_count_(max_count) {
     free_list_.reserve(initial_count);
     for (size_t i = 0; i < initial_count; ++i) {
-      free_list_.push_back(
-          std::make_unique<std::vector<uint8_t>>(buffer_bytes_));
+      free_list_.push_back(std::make_unique<std::vector<uint8_t>>(buffer_bytes_));
     }
   }
 
@@ -89,15 +88,15 @@ private:
   /// deallocates it.
   void release(std::vector<uint8_t> *ptr) {
     std::unique_ptr<std::vector<uint8_t>> owned(ptr);
-    std::lock_guard<std::mutex> lock(mu_);
+    std::lock_guard<std::mutex>           lock(mu_);
     if (free_list_.size() < max_count_) {
       free_list_.push_back(std::move(owned));
     }
   }
 
-  size_t buffer_bytes_;
-  size_t max_count_;
-  mutable std::mutex mu_;
+  size_t                                             buffer_bytes_;
+  size_t                                             max_count_;
+  mutable std::mutex                                 mu_;
   std::vector<std::unique_ptr<std::vector<uint8_t>>> free_list_;
 };
 

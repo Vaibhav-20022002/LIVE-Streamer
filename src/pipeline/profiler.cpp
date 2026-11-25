@@ -9,24 +9,24 @@ namespace streamer {
 
 const char *stage_name(Stage s) {
   switch (s) {
-  case Stage::Capture:
-    return "Capture";
-  case Stage::Decode:
-    return "Decode";
-  case Stage::Preprocess:
-    return "Preprocess";
-  case Stage::Inference:
-    return "Inference";
-  case Stage::Overlay:
-    return "Overlay";
-  case Stage::Encode:
-    return "Encode";
-  case Stage::Mux:
-    return "Mux";
-  case Stage::TotalFrame:
-    return "TotalFrame";
-  case Stage::Count:
-    return "Unknown";
+    case Stage::Capture:
+      return "Capture";
+    case Stage::Decode:
+      return "Decode";
+    case Stage::Preprocess:
+      return "Preprocess";
+    case Stage::Inference:
+      return "Inference";
+    case Stage::Overlay:
+      return "Overlay";
+    case Stage::Encode:
+      return "Encode";
+    case Stage::Mux:
+      return "Mux";
+    case Stage::TotalFrame:
+      return "TotalFrame";
+    case Stage::Count:
+      return "Unknown";
   }
   return "Unknown";
 }
@@ -38,7 +38,7 @@ void StageProfiler::record(Stage stage, double ms) {
   }
 
   std::lock_guard<std::mutex> lock(mu_);
-  auto &ring = rings_[idx];
+  auto                       &ring = rings_[idx];
 
   /// Ring buffer insertion: if window is not yet full, push back.
   /// Otherwise, overwrite the oldest sample at write_idx in circular fashion.
@@ -46,7 +46,7 @@ void StageProfiler::record(Stage stage, double ms) {
     ring.samples.push_back(ms);
   } else {
     ring.samples[ring.write_idx] = ms;
-    ring.write_idx = (ring.write_idx + 1) % kWindowSize;
+    ring.write_idx               = (ring.write_idx + 1) % kWindowSize;
   }
 
   ring.total_count++;
@@ -60,7 +60,7 @@ StageStats StageProfiler::snapshot(Stage stage) const {
   }
 
   std::lock_guard<std::mutex> lock(mu_);
-  const auto &ring = rings_[idx];
+  const auto                 &ring = rings_[idx];
 
   StageStats stats;
   stats.count = ring.total_count;
@@ -81,15 +81,12 @@ StageStats StageProfiler::snapshot(Stage stage) const {
   /// percentile estimation
   ///   without quantization artifacts in small fixed-size sliding windows.
   auto get_percentile = [&](double p) -> double {
-    if (sorted.empty())
-      return 0.0;
-    double rank = p * (sorted.size() - 1);
+    if (sorted.empty()) return 0.0;
+    double rank      = p * (sorted.size() - 1);
     size_t lower_idx = static_cast<size_t>(std::floor(rank));
     size_t upper_idx = static_cast<size_t>(std::ceil(rank));
-    if (lower_idx >= sorted.size())
-      lower_idx = sorted.size() - 1;
-    if (upper_idx >= sorted.size())
-      upper_idx = sorted.size() - 1;
+    if (lower_idx >= sorted.size()) lower_idx = sorted.size() - 1;
+    if (upper_idx >= sorted.size()) upper_idx = sorted.size() - 1;
     double weight = rank - lower_idx;
     return sorted[lower_idx] * (1.0 - weight) + sorted[upper_idx] * weight;
   };
@@ -107,7 +104,7 @@ std::string StageProfiler::format_summary() const {
   ss << std::fixed << std::setprecision(2);
 
   for (size_t i = 0; i < static_cast<size_t>(Stage::Count); ++i) {
-    Stage s = static_cast<Stage>(i);
+    Stage      s  = static_cast<Stage>(i);
     StageStats st = snapshot(s);
     ss << std::setw(12) << stage_name(s) << " | "
        << "Count: " << std::setw(6) << st.count << " | "
@@ -123,9 +120,9 @@ void StageProfiler::reset() {
   std::lock_guard<std::mutex> lock(mu_);
   for (auto &ring : rings_) {
     ring.samples.clear();
-    ring.write_idx = 0;
+    ring.write_idx   = 0;
     ring.total_count = 0;
-    ring.sum_ms = 0.0;
+    ring.sum_ms      = 0.0;
   }
 }
 

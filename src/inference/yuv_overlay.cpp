@@ -27,12 +27,11 @@ namespace streamer {
 /// 5x7 bitmap font covering A-Z, 0-9, '.', '-', ':', '%', and space (5 bits per
 /// row).
 struct FontChar {
-  char c;
+  char    c;
   uint8_t rows[7];
 };
 
-static const FontChar kFont5x7[] = {
-    {'A', {0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11}},
+static const FontChar kFont5x7[] = {{'A', {0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11}},
     {'B', {0x1E, 0x11, 0x11, 0x1E, 0x11, 0x11, 0x1E}},
     {'C', {0x0E, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0E}},
     {'D', {0x1E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x1E}},
@@ -99,7 +98,7 @@ struct YUVColor {
   uint8_t v;
 };
 
-static constexpr int kPaletteSize = 6;
+static constexpr int  kPaletteSize           = 6;
 static const YUVColor kPalette[kPaletteSize] = {
     {145, 54, 34},   //< Bright Green (YUV approx)
     {162, 44, 142},  //< Cyan
@@ -109,12 +108,16 @@ static const YUVColor kPalette[kPaletteSize] = {
     {210, 128, 128}  //< White / Light Gray
 };
 
-void draw_detections_yuv420p(uint8_t *y_plane, int y_stride, uint8_t *u_plane,
-                             int u_stride, uint8_t *v_plane, int v_stride,
-                             int width, int height,
-                             const std::vector<Detection> &detections) {
-  if (!y_plane || !u_plane || !v_plane || width <= 0 || height <= 0 ||
-      detections.empty()) {
+void draw_detections_yuv420p(uint8_t *y_plane,
+    int                               y_stride,
+    uint8_t                          *u_plane,
+    int                               u_stride,
+    uint8_t                          *v_plane,
+    int                               v_stride,
+    int                               width,
+    int                               height,
+    const std::vector<Detection>     &detections) {
+  if (!y_plane || !u_plane || !v_plane || width <= 0 || height <= 0 || detections.empty()) {
     return;
   }
 
@@ -122,7 +125,7 @@ void draw_detections_yuv420p(uint8_t *y_plane, int y_stride, uint8_t *u_plane,
     if (x < 0 || x >= width || y < 0 || y >= height) {
       return;
     }
-    y_plane[y * y_stride + x] = Y;
+    y_plane[y * y_stride + x]             = Y;
     u_plane[(y / 2) * u_stride + (x / 2)] = U;
     v_plane[(y / 2) * v_stride + (x / 2)] = V;
   };
@@ -178,24 +181,23 @@ void draw_detections_yuv420p(uint8_t *y_plane, int y_stride, uint8_t *u_plane,
     }
 
     /// Prepare label text e.g. "PERSON 0.91"
-    char buf[64];
+    char        buf[64];
     std::string upper_label = det.label;
     for (auto &ch : upper_label) {
       ch = std::toupper(static_cast<unsigned char>(ch));
     }
-    std::snprintf(buf, sizeof(buf), "%s %.2f", upper_label.c_str(),
-                  det.confidence);
+    std::snprintf(buf, sizeof(buf), "%s %.2f", upper_label.c_str(), det.confidence);
     std::string text(buf);
 
     /// Header strip height = 12px, positioned above box or inside top of box if
     /// y1 < 12
-    int strip_h = 12;
+    int strip_h  = 12;
     int strip_y1 = (y1 >= strip_h) ? (y1 - strip_h) : y1;
     int strip_y2 = strip_y1 + strip_h - 1;
 
     /// Calculate text width: each char is 5 pixels wide + 1 pixel spacing = 6
     /// pixels per char
-    int text_w = static_cast<int>(text.size()) * 6 - 1;
+    int text_w   = static_cast<int>(text.size()) * 6 - 1;
     int strip_x1 = x1;
     int strip_x2 = std::min(width - 1, x1 + text_w + 4);
 
@@ -209,8 +211,7 @@ void draw_detections_yuv420p(uint8_t *y_plane, int y_stride, uint8_t *u_plane,
 
     /// Render text at 1x scale inside header strip
     int cursor_x = strip_x1 + 2;
-    int cursor_y =
-        strip_y1 + (strip_h - 7) / 2; //< vertically centered (7px font height)
+    int cursor_y = strip_y1 + (strip_h - 7) / 2; //< vertically centered (7px font height)
 
     for (char c : text) {
       const uint8_t *glyph = get_font_char(c);
@@ -220,7 +221,7 @@ void draw_detections_yuv420p(uint8_t *y_plane, int y_stride, uint8_t *u_plane,
           /// Bit 4 is leftmost (MSB of 5 bits: 0x10, 0x08, 0x04, 0x02, 0x01)
           if (row_bits & (1 << (4 - col))) {
             set_pixel_yuv(cursor_x + col, cursor_y + row, 235, 128,
-                          128); //< Bright white text
+                128); //< Bright white text
           }
         }
       }

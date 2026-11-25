@@ -8,53 +8,50 @@
 #include "pipeline/ring_buffer.hpp"
 #include "pipeline/stats_writer.hpp"
 #include <atomic>
-#include <cassert>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <sstream>
 #include <thread>
-#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
-static bool g_failed = false;
+static bool g_failed       = false;
 static bool g_check_failed = false;
 
 /// Simple zero-dependency test framework macros
-#define TEST_CASE(name)                                                        \
-  void name();                                                                 \
-  struct Register_##name {                                                     \
-    Register_##name() {                                                        \
-      std::cout << "[TEST_SUITE] " << #name << " ... " << std::flush;          \
-      try {                                                                    \
-        name();                                                                \
-        std::cout << "PASSED\n";                                               \
-      } catch (const std::exception &e) {                                      \
-        std::cout << "FAILED: exception: " << e.what() << "\n";                \
-        g_failed = true;                                                       \
-      } catch (...) {                                                          \
-        std::cout << "FAILED: unknown exception\n";                            \
-        g_failed = true;                                                       \
-      }                                                                        \
-    }                                                                          \
-  } creator_##name;                                                            \
+#define TEST_CASE(name)                                               \
+  void name();                                                        \
+  struct Register_##name {                                            \
+    Register_##name() {                                               \
+      std::cout << "[TEST_SUITE] " << #name << " ... " << std::flush; \
+      try {                                                           \
+        name();                                                       \
+        std::cout << "PASSED\n";                                      \
+      } catch (const std::exception &e) {                             \
+        std::cout << "FAILED: exception: " << e.what() << "\n";       \
+        g_failed = true;                                              \
+      } catch (...) {                                                 \
+        std::cout << "FAILED: unknown exception\n";                   \
+        g_failed = true;                                              \
+      }                                                               \
+    }                                                                 \
+  } creator_##name;                                                   \
   void name()
 
-#define REQUIRE(cond)                                                          \
-  do {                                                                         \
-    if (!(cond)) {                                                             \
-      throw std::runtime_error("REQUIRE failed: " + std::string(#cond));       \
-    }                                                                          \
+#define REQUIRE(cond)                                                    \
+  do {                                                                   \
+    if (!(cond)) {                                                       \
+      throw std::runtime_error("REQUIRE failed: " + std::string(#cond)); \
+    }                                                                    \
   } while (0)
 
-#define CHECK(cond)                                                            \
-  do {                                                                         \
-    if (!(cond)) {                                                             \
-      std::cerr << "  CHECK failed: " << #cond << "\n";                        \
-      g_check_failed = true;                                                   \
-    }                                                                          \
+#define CHECK(cond)                                     \
+  do {                                                  \
+    if (!(cond)) {                                      \
+      std::cerr << "  CHECK failed: " << #cond << "\n"; \
+      g_check_failed = true;                            \
+    }                                                   \
   } while (0)
 
 /// 1. Config parsing & validation
@@ -88,8 +85,8 @@ TEST_CASE(test_config_parsing_and_validation) {
 
   /// Test invalid port
   streamer::Config bad_cfg1 = cfg;
-  bad_cfg1.web_port = 70000;
-  bool threw1 = false;
+  bad_cfg1.web_port         = 70000;
+  bool threw1               = false;
   try {
     streamer::validate_config(bad_cfg1);
   } catch (const std::invalid_argument &) {
@@ -99,8 +96,8 @@ TEST_CASE(test_config_parsing_and_validation) {
 
   /// Test negative width
   streamer::Config bad_cfg2 = cfg;
-  bad_cfg2.source_width = -100;
-  bool threw2 = false;
+  bad_cfg2.source_width     = -100;
+  bool threw2               = false;
   try {
     streamer::validate_config(bad_cfg2);
   } catch (const std::invalid_argument &) {
@@ -109,9 +106,9 @@ TEST_CASE(test_config_parsing_and_validation) {
   REQUIRE(threw2);
 
   /// Test bad retention
-  streamer::Config bad_cfg3 = cfg;
+  streamer::Config bad_cfg3       = cfg;
   bad_cfg3.playback_retention_sec = -5;
-  bool threw3 = false;
+  bool threw3                     = false;
   try {
     streamer::validate_config(bad_cfg3);
   } catch (const std::invalid_argument &) {
@@ -140,7 +137,7 @@ TEST_CASE(test_drop_oldest_ring_buffer) {
 
   /// Test shutdown waking blocked pop_wait
   std::thread t([&buf]() {
-    int v = 0;
+    int  v   = 0;
     bool res = buf.pop_wait(v);
     REQUIRE(!res);
   });
@@ -150,8 +147,8 @@ TEST_CASE(test_drop_oldest_ring_buffer) {
 
   /// Multi-threaded producer/consumer stress test
   streamer::DropOldestRingBuffer<int> stress_buf(10);
-  std::atomic<bool> stop{false};
-  std::vector<std::thread> producers;
+  std::atomic<bool>                   stop{false};
+  std::vector<std::thread>            producers;
   for (int i = 0; i < 3; ++i) {
     producers.emplace_back([&stress_buf, &stop, i]() {
       int count = 0;
@@ -177,8 +174,7 @@ TEST_CASE(test_drop_oldest_ring_buffer) {
   std::this_thread::sleep_for(std::chrono::milliseconds(50));
   stop = true;
   stress_buf.shutdown();
-  for (auto &p : producers)
-    p.join();
+  for (auto &p : producers) p.join();
   consumer.join();
 }
 
@@ -195,7 +191,7 @@ TEST_CASE(test_byte_buffer_pool) {
   p1.reset();
   REQUIRE(pool->available_count() == 2);
 
-  auto p2 = pool->acquire();
+  auto     p2    = pool->acquire();
   uint8_t *addr2 = p2->data();
   REQUIRE(addr1 == addr2); //< exact same pooled memory address
 
@@ -231,16 +227,16 @@ TEST_CASE(test_exponential_backoff) {
 /// 5. YOLOv8 letterbox, decode & NMS
 TEST_CASE(test_yolov8_pipeline) {
   /// Synthetic 160x90 RGB buffer
-  int src_w = 160;
-  int src_h = 90;
+  int                  src_w = 160;
+  int                  src_h = 90;
   std::vector<uint8_t> rgb(src_w * src_h * 3, 100);
 
-  int dst_w = 320;
-  int dst_h = 320;
+  int                dst_w = 320;
+  int                dst_h = 320;
   std::vector<float> out_nchw(3 * dst_w * dst_h);
 
-  streamer::LetterboxInfo lb = streamer::letterbox_rgb_to_nchw(
-      rgb.data(), src_w, src_h, dst_w, dst_h, out_nchw.data());
+  streamer::LetterboxInfo lb =
+      streamer::letterbox_rgb_to_nchw(rgb.data(), src_w, src_h, dst_w, dst_h, out_nchw.data());
 
   /// Verify scale & padding: scale=2.0, pad_x=0, pad_y=70
   REQUIRE(std::abs(lb.scale - 2.0f) < 1e-5f);
@@ -252,16 +248,15 @@ TEST_CASE(test_yolov8_pipeline) {
   REQUIRE(std::abs(out_nchw[0] - expected_pad) < 1e-3f);
 
   /// Construct an [84, 10] float tensor
-  int num_classes = 80;
-  int num_anchors = 10;
+  int                num_classes = 80;
+  int                num_anchors = 10;
   std::vector<float> tensor((4 + num_classes) * num_anchors, 0.0f);
 
-  auto set_anchor = [&](int idx, float cx, float cy, float w, float h,
-                        int cls_id, float conf) {
-    tensor[0 * num_anchors + idx] = cx;
-    tensor[1 * num_anchors + idx] = cy;
-    tensor[2 * num_anchors + idx] = w;
-    tensor[3 * num_anchors + idx] = h;
+  auto set_anchor = [&](int idx, float cx, float cy, float w, float h, int cls_id, float conf) {
+    tensor[0 * num_anchors + idx]            = cx;
+    tensor[1 * num_anchors + idx]            = cy;
+    tensor[2 * num_anchors + idx]            = w;
+    tensor[3 * num_anchors + idx]            = h;
     tensor[(4 + cls_id) * num_anchors + idx] = conf;
   };
 
@@ -276,19 +271,16 @@ TEST_CASE(test_yolov8_pipeline) {
   /// 5. non-target class (dog = class 16)
   set_anchor(4, 50.0f, 50.0f, 20.0f, 20.0f, 16, 0.9f);
 
-  std::unordered_set<std::string> targets = {"person", "car"};
-  std::vector<streamer::Detection> dets =
-      streamer::decode_yolov8_output(tensor.data(), num_classes, num_anchors,
-                                     lb, src_w, src_h, 0.45f, 0.5f, targets);
+  std::unordered_set<std::string>  targets = {"person", "car"};
+  std::vector<streamer::Detection> dets    = streamer::decode_yolov8_output(
+      tensor.data(), num_classes, num_anchors, lb, src_w, src_h, 0.45f, 0.5f, targets);
 
   REQUIRE(dets.size() == 2);
   bool found_person = false;
-  bool found_car = false;
+  bool found_car    = false;
   for (const auto &d : dets) {
-    if (d.label == "person")
-      found_person = true;
-    if (d.label == "car")
-      found_car = true;
+    if (d.label == "person") found_person = true;
+    if (d.label == "car") found_car = true;
     REQUIRE(d.x1 >= 0.0f);
     REQUIRE(d.y1 >= 0.0f);
     REQUIRE(d.x2 <= static_cast<float>(src_w));
@@ -300,20 +292,19 @@ TEST_CASE(test_yolov8_pipeline) {
 
 /// 6. YUV420P overlay clipping
 TEST_CASE(test_yuv_overlay_clipping) {
-  int w = 128;
-  int h = 96;
+  int                  w = 128;
+  int                  h = 96;
   std::vector<uint8_t> y_plane(w * h, 128);
   std::vector<uint8_t> u_plane((w / 2) * (h / 2), 128);
   std::vector<uint8_t> v_plane((w / 2) * (h / 2), 128);
 
   std::vector<streamer::Detection> dets = {
       {0, "person", 0.9f, 10.0f, 10.0f, 50.0f, 50.0f},
-      {2, "car", 0.8f, -10.0f, -5.0f, 140.0f, 110.0f}
-      //< partially out-of-bounds
+      {2, "car", 0.8f, -10.0f, -5.0f, 140.0f, 110.0f} //< partially out-of-bounds
   };
 
-  streamer::draw_detections_yuv420p(y_plane.data(), w, u_plane.data(), w / 2,
-                                    v_plane.data(), w / 2, w, h, dets);
+  streamer::draw_detections_yuv420p(
+      y_plane.data(), w, u_plane.data(), w / 2, v_plane.data(), w / 2, w, h, dets);
 
   bool pixel_changed = false;
   for (size_t i = 0; i < y_plane.size(); ++i) {
@@ -346,16 +337,14 @@ TEST_CASE(test_playback_manager_and_stats) {
 
   /// Create dummy segment files
   for (int i = 0; i < 5; ++i) {
-    std::ofstream(tmp_hls / ("seg_00000" + std::to_string(i) + ".m4s"))
-        << "dummy segment data";
+    std::ofstream(tmp_hls / ("seg_00000" + std::to_string(i) + ".m4s")) << "dummy segment data";
   }
   std::ofstream(tmp_hls / "init_0.mp4") << "dummy init 0";
   std::ofstream(tmp_hls / "init_1.mp4") << "dummy init 1";
 
-  streamer::PlaybackManager pm(
-      tmp_hls,
+  streamer::PlaybackManager pm(tmp_hls,
       8); //< retention_sec = 8 (prunes seg_000000, keeps seg_000001..000004)
-  bool sync1 = pm.sync_from_live_playlist();
+  bool                      sync1 = pm.sync_from_live_playlist();
   REQUIRE(sync1);
   REQUIRE(pm.active_live_count() == 2);
 
@@ -388,10 +377,8 @@ TEST_CASE(test_playback_manager_and_stats) {
   /// leaving 8s)
   size_t pruned = pm.prune_expired();
   REQUIRE(pruned == 1);
-  REQUIRE(
-      std::filesystem::exists(tmp_hls / "seg_000001.m4s")); //< retained in DVR
-  REQUIRE(std::filesystem::exists(
-      tmp_hls / "seg_000004.m4s")); //< active live never deleted
+  REQUIRE(std::filesystem::exists(tmp_hls / "seg_000001.m4s"));  //< retained in DVR
+  REQUIRE(std::filesystem::exists(tmp_hls / "seg_000004.m4s"));  //< active live never deleted
   REQUIRE(!std::filesystem::exists(tmp_hls / "seg_000000.m4s")); //< pruned
 
   /// Write playback manifest and events json
@@ -402,8 +389,7 @@ TEST_CASE(test_playback_manager_and_stats) {
   /// #EXT-X-MAP entries
   {
     std::ifstream ifs(tmp_hls / "playback.m3u8");
-    std::string content((std::istreambuf_iterator<char>(ifs)),
-                        std::istreambuf_iterator<char>());
+    std::string   content((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
     REQUIRE(content.find("#EXT-X-DISCONTINUITY") != std::string::npos);
     REQUIRE(content.find("init_0.mp4") != std::string::npos);
     REQUIRE(content.find("init_1.mp4") != std::string::npos);
@@ -411,9 +397,9 @@ TEST_CASE(test_playback_manager_and_stats) {
 
   /// Test stats writer JSON serialization
   streamer::PipelineMetrics metrics;
-  metrics.state = "streaming";
-  metrics.width = 1280;
-  metrics.height = 720;
+  metrics.state        = "streaming";
+  metrics.width        = 1280;
+  metrics.height       = 720;
   std::string json_str = streamer::serialize_stats_json(metrics);
   REQUIRE(json_str.find("streaming") != std::string::npos);
   REQUIRE(json_str.find("1280") != std::string::npos);

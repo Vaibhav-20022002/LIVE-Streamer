@@ -33,8 +33,7 @@ namespace {
 
 std::string trim_whitespace(const std::string &s) {
   size_t start = 0;
-  while (start < s.size() &&
-         std::isspace(static_cast<unsigned char>(s[start]))) {
+  while (start < s.size() && std::isspace(static_cast<unsigned char>(s[start]))) {
     ++start;
   }
   size_t end = s.size();
@@ -50,44 +49,41 @@ bool starts_with(const std::string &s, const char *prefix) {
 }
 
 bool is_init_mp4_filename(const std::string &fname) {
-  constexpr const char *kPrefix = "init_";
-  constexpr const char *kSuffix = ".mp4";
-  const size_t prefix_len = 5;
-  const size_t suffix_len = 4;
-  return fname.size() > prefix_len + suffix_len &&
-         fname.compare(0, prefix_len, kPrefix) == 0 &&
-         fname.compare(fname.size() - suffix_len, suffix_len, kSuffix) == 0;
+  constexpr const char *kPrefix    = "init_";
+  constexpr const char *kSuffix    = ".mp4";
+  const size_t          prefix_len = 5;
+  const size_t          suffix_len = 4;
+  return fname.size() > prefix_len + suffix_len && fname.compare(0, prefix_len, kPrefix) == 0 &&
+      fname.compare(fname.size() - suffix_len, suffix_len, kSuffix) == 0;
 }
 
 } //< namespace
 
-PlaybackManager::PlaybackManager(std::filesystem::path hls_dir,
-                                 int retention_sec)
-    : hls_dir_(std::move(hls_dir)), retention_sec_(std::max(0, retention_sec)) {
-}
+PlaybackManager::PlaybackManager(std::filesystem::path hls_dir, int retention_sec)
+    : hls_dir_(std::move(hls_dir))
+    , retention_sec_(std::max(0, retention_sec)) {}
 
 int PlaybackManager::extract_segment_number(const std::string &filename) {
-  constexpr const char *kExt = ".m4s";
-  constexpr size_t kExtLen = 4;
+  constexpr const char *kExt    = ".m4s";
+  constexpr size_t      kExtLen = 4;
   if (filename.size() <= kExtLen ||
       filename.compare(filename.size() - kExtLen, kExtLen, kExt) != 0) {
     return -1;
   }
 
-  size_t end = filename.size() - kExtLen;
+  size_t end   = filename.size() - kExtLen;
   size_t start = end;
-  while (start > 0 &&
-         std::isdigit(static_cast<unsigned char>(filename[start - 1]))) {
+  while (start > 0 && std::isdigit(static_cast<unsigned char>(filename[start - 1]))) {
     --start;
   }
   if (start == end) {
     return -1;
   }
 
-  int value = -1;
+  int         value = -1;
   const char *first = filename.data() + start;
-  const char *last = filename.data() + end;
-  auto res = std::from_chars(first, last, value);
+  const char *last  = filename.data() + end;
+  auto        res   = std::from_chars(first, last, value);
   if (res.ec != std::errc{} || res.ptr != last) {
     return -1;
   }
@@ -96,7 +92,7 @@ int PlaybackManager::extract_segment_number(const std::string &filename) {
 
 bool PlaybackManager::sync_from_live_playlist() {
   const std::filesystem::path live_path = hls_dir_ / "live.m3u8";
-  std::ifstream ifs(live_path);
+  std::ifstream               ifs(live_path);
   if (!ifs.is_open()) {
     return false;
   }
@@ -104,9 +100,9 @@ bool PlaybackManager::sync_from_live_playlist() {
   live_filenames_.clear();
 
   std::string map_uri;
-  bool seen_discont = false;
-  double pending_dur = 0.0;
-  bool has_extinf = false;
+  bool        seen_discont = false;
+  double      pending_dur  = 0.0;
+  bool        has_extinf   = false;
 
   std::string line;
   while (std::getline(ifs, line)) {
@@ -119,7 +115,7 @@ bool PlaybackManager::sync_from_live_playlist() {
       const size_t uri_pos = trimmed.find("URI=\"");
       if (uri_pos != std::string::npos) {
         const size_t val_start = uri_pos + 5;
-        const size_t val_end = trimmed.find('"', val_start);
+        const size_t val_end   = trimmed.find('"', val_start);
         if (val_end != std::string::npos) {
           map_uri = trimmed.substr(val_start, val_end - val_start);
         }
@@ -133,12 +129,12 @@ bool PlaybackManager::sync_from_live_playlist() {
     }
 
     if (starts_with(trimmed, "#EXTINF:")) {
-      const char *num_start = trimmed.c_str() + 8;
-      char *num_end = nullptr;
-      const double dur = std::strtod(num_start, &num_end);
+      const char  *num_start = trimmed.c_str() + 8;
+      char        *num_end   = nullptr;
+      const double dur       = std::strtod(num_start, &num_end);
       if (num_end != num_start && std::isfinite(dur) && dur >= 0.0) {
         pending_dur = dur;
-        has_extinf = true;
+        has_extinf  = true;
       }
       continue;
     }
@@ -153,12 +149,12 @@ bool PlaybackManager::sync_from_live_playlist() {
 
     if (known_filenames_.find(filename) == known_filenames_.end()) {
       SegmentEntry entry;
-      entry.filename = filename;
-      entry.init_uri = !map_uri.empty() ? map_uri : current_init_uri_;
-      entry.duration_sec = has_extinf ? pending_dur : 0.0;
+      entry.filename       = filename;
+      entry.init_uri       = !map_uri.empty() ? map_uri : current_init_uri_;
+      entry.duration_sec   = has_extinf ? pending_dur : 0.0;
       entry.start_epoch_ms = now_epoch_ms();
-      entry.discontinuity = pending_discontinuity_ || seen_discont;
-      entry.seg_number = extract_segment_number(filename);
+      entry.discontinuity  = pending_discontinuity_ || seen_discont;
+      entry.seg_number     = extract_segment_number(filename);
 
       pending_discontinuity_ = false;
       if (entry.seg_number > highest_seg_num_) {
@@ -172,8 +168,8 @@ bool PlaybackManager::sync_from_live_playlist() {
     /// Reset per-segment tags so an already-known segment's tags do not bleed
     /// onto the next segment.
     seen_discont = false;
-    pending_dur = 0.0;
-    has_extinf = false;
+    pending_dur  = 0.0;
+    has_extinf   = false;
   }
 
   return true;
@@ -186,8 +182,7 @@ void PlaybackManager::mark_discontinuity(const std::string &new_init_uri) {
   }
 }
 
-void PlaybackManager::record_detections(int64_t epoch_ms,
-                                        const std::vector<Detection> &dets) {
+void PlaybackManager::record_detections(int64_t epoch_ms, const std::vector<Detection> &dets) {
   if (dets.empty()) {
     return;
   }
@@ -223,20 +218,17 @@ void PlaybackManager::record_detections(int64_t epoch_ms,
   last_event_epoch_ms_ = epoch_ms;
 
   DetectionEvent ev;
-  ev.epoch_ms = epoch_ms;
+  ev.epoch_ms       = epoch_ms;
   ev.media_time_sec = total_duration_sec();
-  ev.segment = segments_.empty() ? std::string() : segments_.back().filename;
-  ev.objects = std::move(objects);
+  ev.segment        = segments_.empty() ? std::string() : segments_.back().filename;
+  ev.objects        = std::move(objects);
 
   {
     std::ostringstream ss;
-    ss << std::fixed << std::setprecision(2)
-       << "Indexed detection | dvr_t=" << ev.media_time_sec
-       << "s seg=" << (ev.segment.empty() ? "pending" : ev.segment)
-       << " objects=[";
+    ss << std::fixed << std::setprecision(2) << "Indexed detection | dvr_t=" << ev.media_time_sec
+       << "s seg=" << (ev.segment.empty() ? "pending" : ev.segment) << " objects=[";
     for (size_t i = 0; i < ev.objects.size(); ++i) {
-      if (i > 0)
-        ss << ", ";
+      if (i > 0) ss << ", ";
       ss << ev.objects[i].first << ":" << ev.objects[i].second;
     }
     ss << "]";
@@ -247,19 +239,18 @@ void PlaybackManager::record_detections(int64_t epoch_ms,
 }
 
 size_t PlaybackManager::prune_expired() {
-  double total_dur = total_duration_sec();
-  double removed_dur = 0.0;
+  double total_dur     = total_duration_sec();
+  double removed_dur   = 0.0;
   size_t removed_count = 0;
 
-  while (segments_.size() > 1 &&
-         total_dur > static_cast<double>(retention_sec_)) {
+  while (segments_.size() > 1 && total_dur > static_cast<double>(retention_sec_)) {
     const SegmentEntry &front = segments_.front();
     if (live_filenames_.count(front.filename) > 0) {
       /// Never delete segments still referenced by live.m3u8.
       break;
     }
 
-    const double seg_dur = front.duration_sec;
+    const double      seg_dur  = front.duration_sec;
     const std::string seg_file = front.filename;
 
     total_dur -= seg_dur;
@@ -281,19 +272,16 @@ size_t PlaybackManager::prune_expired() {
     for (auto &ev : events_) {
       ev.media_time_sec -= removed_dur;
     }
-    events_.erase(std::remove_if(events_.begin(), events_.end(),
-                                 [](const DetectionEvent &ev) {
-                                   return ev.media_time_sec < 0.0;
-                                 }),
-                  events_.end());
+    events_.erase(std::remove_if(events_.begin(),
+                      events_.end(),
+                      [](const DetectionEvent &ev) { return ev.media_time_sec < 0.0; }),
+        events_.end());
   }
 
   if (removed_count > 0) {
     std::ostringstream ss;
-    ss << std::fixed << std::setprecision(1)
-       << "Pruned expired segments | count=" << removed_count
-       << " removed_sec=" << removed_dur
-       << " remaining_segs=" << segments_.size()
+    ss << std::fixed << std::setprecision(1) << "Pruned expired segments | count=" << removed_count
+       << " removed_sec=" << removed_dur << " remaining_segs=" << segments_.size()
        << " media_seq=" << media_sequence_;
     log_info("dvr", ss.str());
   }
@@ -310,8 +298,7 @@ size_t PlaybackManager::prune_expired() {
   }
 
   std::error_code dir_ec;
-  for (const auto &entry :
-       std::filesystem::directory_iterator(hls_dir_, dir_ec)) {
+  for (const auto &entry : std::filesystem::directory_iterator(hls_dir_, dir_ec)) {
     if (dir_ec) {
       break;
     }
@@ -320,8 +307,7 @@ size_t PlaybackManager::prune_expired() {
       continue;
     }
     const std::string fname = entry.path().filename().string();
-    if (is_init_mp4_filename(fname) &&
-        referenced_inits.find(fname) == referenced_inits.end()) {
+    if (is_init_mp4_filename(fname) && referenced_inits.find(fname) == referenced_inits.end()) {
       std::error_code rm_ec;
       std::filesystem::remove(entry.path(), rm_ec);
     }
@@ -352,10 +338,9 @@ bool PlaybackManager::write_playback_manifest() const {
       << "#EXT-X-INDEPENDENT-SEGMENTS\n";
 
   for (size_t i = 0; i < segments_.size(); ++i) {
-    const SegmentEntry &seg = segments_[i];
-    const bool emit_discont = (i > 0 && seg.discontinuity);
-    const bool emit_map =
-        (i == 0) || emit_discont || (seg.init_uri != segments_[i - 1].init_uri);
+    const SegmentEntry &seg          = segments_[i];
+    const bool          emit_discont = (i > 0 && seg.discontinuity);
+    const bool emit_map = (i == 0) || emit_discont || (seg.init_uri != segments_[i - 1].init_uri);
 
     if (emit_discont) {
       oss << "#EXT-X-DISCONTINUITY\n";
@@ -385,10 +370,8 @@ bool PlaybackManager::write_events_json() const {
         << "      \"timestamp\": " << std::setprecision(3)
         << (static_cast<double>(ev.epoch_ms) / 1000.0) << ",\n"
         << "      \"epoch_ms\": " << ev.epoch_ms << ",\n"
-        << "      \"media_time_sec\": " << std::setprecision(3)
-        << ev.media_time_sec << ",\n"
-        << "      \"segment_name\": \"" << escape_json_string(ev.segment)
-        << "\",\n"
+        << "      \"media_time_sec\": " << std::setprecision(3) << ev.media_time_sec << ",\n"
+        << "      \"segment_name\": \"" << escape_json_string(ev.segment) << "\",\n"
         << "      \"detections\": [";
 
     for (size_t j = 0; j < ev.objects.size(); ++j) {
@@ -397,8 +380,7 @@ bool PlaybackManager::write_events_json() const {
         oss << ",";
       }
       oss << "{\"label\": \"" << escape_json_string(obj.first)
-          << "\", \"confidence\": " << std::setprecision(4) << obj.second
-          << "}";
+          << "\", \"confidence\": " << std::setprecision(4) << obj.second << "}";
     }
 
     oss << "]\n    }";
