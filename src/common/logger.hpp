@@ -35,7 +35,7 @@ public:
     gmtime_r(&now_t, &utc_tm);
 #endif
 
-    char ts_buf[32];
+    char ts_buf[96];
     std::snprintf(ts_buf, sizeof(ts_buf), "%04d-%02d-%02dT%02d:%02d:%02d.%03dZ",
                   utc_tm.tm_year + 1900, utc_tm.tm_mon + 1, utc_tm.tm_mday,
                   utc_tm.tm_hour, utc_tm.tm_min, utc_tm.tm_sec,
