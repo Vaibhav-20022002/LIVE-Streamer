@@ -1,0 +1,37 @@
+services:
+  mock-camera:
+    image: bluenviron/mediamtx:1.11.3-ffmpeg
+    volumes:
+      - ./config/mock-camera.yml:/mediamtx.yml:ro
+      - ./person-bicycle-car-detection.mp4:/media/sample.mp4:ro
+    ports:
+      - "8554:8554"
+    restart: unless-stopped
+
+  streamer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    volumes:
+      - hls_data:/data/hls
+      - ./models:/app/models:ro
+    depends_on:
+      - mock-camera
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "${WEB_PORT:-8999}:8999"
+    volumes:
+      - ./config/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./web:/usr/share/nginx/html:ro
+      - hls_data:/data/hls:ro
+    depends_on:
+      - streamer
+    restart: unless-stopped
+
+volumes:
+  hls_data:

@@ -1,0 +1,3 @@
+option('enable_ai', type: 'feature', value: 'auto', description: 'Enable ONNX Runtime C++ AI inference')
+option('enable_tests', type: 'boolean', value: true, description: 'Build unit test suite')
+option('onnxruntime_dir', type: 'string', value: '', description: 'Optional path to ONNX Runtime SDK root (include/ and lib/)')

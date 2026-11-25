@@ -1,0 +1,13 @@
+.git
+.DS_Store
+build
+build_*
+.env
+hls_out
+data
+*.m4s
+*.m3u8
+init*.mp4
+*.tmp
+models/*.onnx
+__pycache__

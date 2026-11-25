@@ -1,0 +1,17 @@
+.DS_Store
+build/
+build_*/
+.env
+hls_out/
+data/
+*.m4s
+*.m3u8
+init*.mp4
+stats.json
+events.json
+models/*.onnx
+*.o
+*.tmp
+perf.data*
+__pycache__/
+*.mp4

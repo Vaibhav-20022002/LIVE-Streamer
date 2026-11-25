@@ -1,0 +1,47 @@
+[
+  {
+    "mode": "Baseline",
+    "frames_processed": 365,
+    "ai_inferences": 365,
+    "effective_fps": 30.54,
+    "decode_avg": 0.001,
+    "decode_p95": 0.005,
+    "inference_avg": 0.31,
+    "inference_p95": 0.529,
+    "encode_avg": 1.218,
+    "encode_p95": 1.991,
+    "total_avg": 4.009,
+    "total_p95": 5.932,
+    "peak_rss_mb": 40.64
+  },
+  {
+    "mode": "Optimized",
+    "frames_processed": 365,
+    "ai_inferences": 365,
+    "effective_fps": 30.16,
+    "decode_avg": 0.002,
+    "decode_p95": 0.006,
+    "inference_avg": 0.238,
+    "inference_p95": 0.352,
+    "encode_avg": 2.518,
+    "encode_p95": 3.898,
+    "total_avg": 3.15,
+    "total_p95": 5.026,
+    "peak_rss_mb": 46.39
+  },
+  {
+    "mode": "Smart Remux",
+    "frames_processed": 365,
+    "ai_inferences": 0,
+    "effective_fps": 30.24,
+    "decode_avg": 0.0,
+    "decode_p95": 0.0,
+    "inference_avg": 0.0,
+    "inference_p95": 0.0,
+    "encode_avg": 0.099,
+    "encode_p95": 0.023,
+    "total_avg": 0.099,
+    "total_p95": 0.023,
+    "peak_rss_mb": 23.72
+  }
+]

@@ -1,0 +1,453 @@
+document.addEventListener('DOMContentLoaded', () => {
+  const video = document.getElementById('video');
+  const playerBanner = document.getElementById('player-banner');
+  const bannerText = document.getElementById('banner-text');
+
+  // Mode Switcher & Live Edge Buttons
+  const btnLive = document.getElementById('btn-mode-live');
+  const btnPlayback = document.getElementById('btn-mode-playback');
+  const btnLiveEdge = document.getElementById('btn-live-edge');
+
+  // Telemetry Elements
+  const statState = document.getElementById('stat-state');
+  const statMode = document.getElementById('stat-mode');
+  const statLatency = document.getElementById('stat-latency');
+  const statFps = document.getElementById('stat-fps');
+  const statAi = document.getElementById('stat-ai');
+  const statDetections = document.getElementById('stat-detections');
+  const statResilience = document.getElementById('stat-resilience');
+
+  // Search Elements
+  const searchInput = document.getElementById('search-input');
+  const btnClearSearch = document.getElementById('btn-clear-search');
+  const matchBtns = document.querySelectorAll('.match-btn');
+  const confSlider = document.getElementById('conf-slider');
+  const confVal = document.getElementById('conf-val');
+  const searchResultsContainer = document.getElementById('search-results');
+  const resultCount = document.getElementById('result-count');
+
+  // State Variables
+  let currentMode = 'live'; // 'live' or 'playback'
+  let hls = null;
+  let reconnectAttempts = 0;
+  let backoffDelay = 1000;
+  let reconnectTimer = null;
+  let pendingSeekTime = null;
+  let eventsData = [];
+  let matchMode = 'any';
+  let minConfidence = parseFloat(confSlider.value) || 0.35;
+
+  const LIVE_URL = '/hls/live.m3u8';
+  const PLAYBACK_URL = '/hls/playback.m3u8';
+
+  function buildHlsConfig(mode) {
+    if (mode === 'playback') {
+      // playback.m3u8 grows dynamically without #EXT-X-ENDLIST. Disable live-edge
+      // latency snapping so seeking anywhere along the DVR timeline stays put.
+      return {
+        lowLatencyMode: false,
+        enableWorker: true,
+        startPosition: pendingSeekTime !== null ? pendingSeekTime : 0,
+        liveSyncDurationCount: 3,
+        liveMaxLatencyDurationCount: Infinity,
+        maxLiveSyncPlaybackRate: 1,
+        liveDurationInfinity: false,
+        backBufferLength: 1800,
+        maxBufferLength: 30,
+        manifestLoadingMaxRetry: 100,
+        manifestLoadingRetryDelay: 1000,
+        fragLoadingMaxRetry: 10
+      };
+    }
+
+    return {
+      lowLatencyMode: false,
+      enableWorker: true,
+      liveSyncDurationCount: 2,
+      liveMaxLatencyDurationCount: 5,
+      manifestLoadingMaxRetry: 100,
+      manifestLoadingRetryDelay: 1000,
+      fragLoadingMaxRetry: 10
+    };
+  }
+
+  function applyClampedDvrSeek(offsetSec) {
+    if (video.seekable && video.seekable.length > 0) {
+      const base = video.seekable.start(0);
+      const end = video.seekable.end(video.seekable.length - 1);
+      video.currentTime = Math.max(base, Math.min(base + offsetSec, end));
+    } else {
+      video.currentTime = Math.max(0, offsetSec);
+    }
+    video.play().catch(e => console.warn('Play after seek failed:', e));
+  }
+
+  function initPlayer(url, mode = currentMode) {
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+    if (hls) {
+      hls.destroy();
+      hls = null;
+    }
+
+    hideBanner();
+
+    if (typeof Hls !== 'undefined' && Hls.isSupported()) {
+      hls = new Hls(buildHlsConfig(mode));
+      hls.loadSource(url);
+      hls.attachMedia(video);
+
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        reconnectAttempts = 0;
+        backoffDelay = 1000;
+        hideBanner();
+        updateStateBadge('STREAMING');
+
+        if (mode === 'playback' && pendingSeekTime !== null) {
+          const target = pendingSeekTime;
+          pendingSeekTime = null;
+          applyClampedDvrSeek(target);
+        } else {
+          video.play().catch(e => console.warn('Autoplay prevented:', e));
+        }
+      });
+
+      hls.on(Hls.Events.FRAG_BUFFERED, () => {
+        reconnectAttempts = 0;
+        backoffDelay = 1000;
+        hideBanner();
+        updateStateBadge('STREAMING');
+      });
+
+      hls.on(Hls.Events.ERROR, (_event, data) => {
+        if (!data.fatal) return;
+        switch (data.type) {
+          case Hls.ErrorTypes.NETWORK_ERROR:
+            console.warn('HLS network error, scheduling retry:', data.details);
+            handleNetworkError();
+            break;
+          case Hls.ErrorTypes.MEDIA_ERROR:
+            console.warn('HLS media error, recovering:', data.details);
+            updateStateBadge('RECONNECTING');
+            hls.recoverMediaError();
+            break;
+          default:
+            console.error('Unrecoverable HLS error:', data);
+            updateStateBadge('OFFLINE');
+            hls.destroy();
+            hls = null;
+            break;
+        }
+      });
+    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+      // Native HLS fallback (Safari)
+      video.src = url;
+      video.load();
+      video.addEventListener('loadedmetadata', () => {
+        updateStateBadge('STREAMING');
+        if (mode === 'playback' && pendingSeekTime !== null) {
+          const target = pendingSeekTime;
+          pendingSeekTime = null;
+          applyClampedDvrSeek(target);
+        } else {
+          video.play().catch(e => console.warn('Autoplay prevented:', e));
+        }
+      }, { once: true });
+      video.addEventListener('error', () => {
+        updateStateBadge('OFFLINE');
+        showBanner('Stream playback error encountered.');
+      }, { once: true });
+    } else {
+      updateStateBadge('OFFLINE');
+      showBanner('HLS is not supported in this browser.');
+    }
+  }
+
+  function handleNetworkError() {
+    reconnectAttempts++;
+    updateStateBadge('RECONNECTING');
+
+    const sec = Math.round(backoffDelay / 1000);
+    showBanner(`Stream connection interrupted — auto-recovering in ${sec}s (Attempt ${reconnectAttempts})...`);
+
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+
+    reconnectTimer = setTimeout(() => {
+      if (hls) {
+        hls.startLoad();
+      } else {
+        initPlayer(currentMode === 'live' ? LIVE_URL : PLAYBACK_URL, currentMode);
+      }
+    }, backoffDelay);
+
+    backoffDelay = Math.min(backoffDelay * 2, 10000);
+  }
+
+  function showBanner(msg) {
+    bannerText.textContent = msg;
+    playerBanner.classList.remove('hidden');
+  }
+
+  function hideBanner() {
+    playerBanner.classList.add('hidden');
+  }
+
+  function updateStateBadge(state) {
+    statState.textContent = state;
+    statState.className = 'badge';
+    if (state === 'STREAMING') {
+      statState.classList.add('badge-streaming');
+    } else if (state === 'RECONNECTING' || state === 'CONNECTING') {
+      statState.classList.add('badge-reconnecting');
+    } else {
+      statState.classList.add('badge-offline');
+    }
+  }
+
+  function switchMode(mode) {
+    currentMode = mode;
+    if (mode === 'live') {
+      pendingSeekTime = null;
+      btnLive.classList.add('active');
+      btnPlayback.classList.remove('active');
+      initPlayer(LIVE_URL, 'live');
+    } else {
+      btnPlayback.classList.add('active');
+      btnLive.classList.remove('active');
+      initPlayer(PLAYBACK_URL, 'playback');
+    }
+  }
+
+  btnLive.addEventListener('click', () => switchMode('live'));
+  btnPlayback.addEventListener('click', () => switchMode('playback'));
+
+  btnLiveEdge.addEventListener('click', () => {
+    if (currentMode !== 'live') {
+      switchMode('live');
+    } else if (hls && hls.liveSyncPosition) {
+      video.currentTime = hls.liveSyncPosition;
+    } else if (video.seekable && video.seekable.length > 0) {
+      video.currentTime = video.seekable.end(video.seekable.length - 1);
+    }
+  });
+
+  function seekToTime(targetSec) {
+    if (currentMode !== 'playback') {
+      pendingSeekTime = targetSec;
+      switchMode('playback');
+      return;
+    }
+
+    if (video.readyState >= 1) {
+      applyClampedDvrSeek(targetSec);
+    } else {
+      pendingSeekTime = targetSec;
+    }
+  }
+
+  async function pollStats() {
+    try {
+      const response = await fetch('/hls/stats.json', { cache: 'no-store' });
+      if (!response.ok) return;
+      const stats = await response.json();
+
+      if (stats.mode) {
+        statMode.textContent = stats.mode.toUpperCase();
+      }
+
+      if (stats.ingest_fps !== undefined && stats.output_fps !== undefined) {
+        statFps.textContent = `${stats.ingest_fps.toFixed(1)} / ${stats.output_fps.toFixed(1)}`;
+      }
+
+      if (stats.ai_avg_ms !== undefined && stats.ai_p95_ms !== undefined) {
+        statAi.textContent = `${stats.ai_avg_ms.toFixed(1)} ms avg (p95 ${stats.ai_p95_ms.toFixed(1)} ms)`;
+      } else {
+        statAi.textContent = 'Disabled';
+      }
+
+      if (stats.active_detections && Array.isArray(stats.active_detections)) {
+        statDetections.innerHTML = stats.active_detections.map(det =>
+          `<span class="det-pill">${escapeHtml(det.label)} (${(det.confidence * 100).toFixed(0)}%)</span>`
+        ).join('');
+      } else {
+        statDetections.innerHTML = '';
+      }
+
+      const reconCount = stats.reconnect_count ?? reconnectAttempts;
+      const dvrDur = stats.dvr_window_sec ? formatDuration(stats.dvr_window_sec) : '0m 0s';
+      statResilience.textContent = `${reconCount} reconnects | ${dvrDur} DVR`;
+
+      if (stats.state === 'reconnecting' && currentMode === 'live') {
+        updateStateBadge('RECONNECTING');
+      }
+    } catch (_err) {
+      // Ignore transient telemetry fetch errors during network interruptions
+    }
+  }
+
+  setInterval(() => {
+    if (currentMode === 'playback') {
+      if (video.seekable && video.seekable.length > 0) {
+        const start = video.seekable.start(0);
+        const end = video.seekable.end(video.seekable.length - 1);
+        const pos = Math.max(0, video.currentTime - start);
+        const total = Math.max(0, end - start);
+        statLatency.textContent = `DVR ${formatMinutesSeconds(pos)} / ${formatMinutesSeconds(total)}`;
+      } else {
+        statLatency.textContent = 'DVR';
+      }
+    } else if (hls && hls.latency !== undefined) {
+      statLatency.textContent = `${hls.latency.toFixed(1)}s`;
+    } else if (video.seekable && video.seekable.length > 0) {
+      const latency = video.seekable.end(video.seekable.length - 1) - video.currentTime;
+      statLatency.textContent = `${Math.max(0, latency).toFixed(1)}s`;
+    } else {
+      statLatency.textContent = '--';
+    }
+  }, 500);
+
+  setInterval(pollStats, 1000);
+
+  async function pollEvents() {
+    try {
+      const response = await fetch('/hls/events.json', { cache: 'no-store' });
+      if (!response.ok) return;
+      const data = await response.json();
+      const list = Array.isArray(data) ? data : (Array.isArray(data.events) ? data.events : null);
+      if (list) {
+        eventsData = list;
+        renderSearchResults();
+      }
+    } catch (_err) {
+      // Ignore transient event index fetch errors
+    }
+  }
+
+  setInterval(pollEvents, 2000);
+
+  searchInput.addEventListener('input', renderSearchResults);
+  btnClearSearch.addEventListener('click', () => {
+    searchInput.value = '';
+    renderSearchResults();
+  });
+
+  matchBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      matchBtns.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      matchMode = btn.getAttribute('data-match');
+      renderSearchResults();
+    });
+  });
+
+  confSlider.addEventListener('input', () => {
+    minConfidence = parseFloat(confSlider.value);
+    confVal.textContent = minConfidence.toFixed(2);
+    renderSearchResults();
+  });
+
+  function renderSearchResults() {
+    const rawQuery = searchInput.value.trim();
+    const queryTokens = rawQuery
+      ? rawQuery.split(',').map(t => t.trim().toLowerCase()).filter(t => t.length > 0)
+      : [];
+
+    const filtered = eventsData.filter(ev => {
+      if (!ev.detections || !Array.isArray(ev.detections)) return false;
+
+      const validDetections = ev.detections.filter(d => (d.confidence || 0) >= minConfidence);
+      if (validDetections.length === 0) return false;
+
+      if (queryTokens.length === 0) return true;
+
+      const detectedLabels = validDetections.map(d => (d.label || '').toLowerCase());
+      if (matchMode === 'all') {
+        return queryTokens.every(token => detectedLabels.some(label => label.includes(token)));
+      }
+      return queryTokens.some(token => detectedLabels.some(label => label.includes(token)));
+    });
+
+    filtered.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+    const cappedResults = filtered.slice(0, 100);
+
+    resultCount.textContent = `${cappedResults.length} results`;
+
+    if (cappedResults.length === 0) {
+      searchResultsContainer.innerHTML = `
+        <div class="empty-state">
+          <p>No matching detection events found.</p>
+          <p class="empty-sub">Try adjusting search terms or lowering confidence threshold.</p>
+        </div>
+      `;
+      return;
+    }
+
+    searchResultsContainer.innerHTML = cappedResults.map(ev => {
+      const timeStr = ev.timestamp ? new Date(ev.timestamp * 1000).toLocaleTimeString() : 'Unknown Time';
+      const dvrOffsetSec = ev.media_time_sec || 0;
+      const dvrOffsetFormatted = formatMinutesSeconds(dvrOffsetSec);
+      const segmentName = ev.segment_name || 'segment.m4s';
+
+      const validDetections = (ev.detections || []).filter(d => (d.confidence || 0) >= minConfidence);
+      const chipsHtml = validDetections.map(d => {
+        const labelLower = (d.label || '').toLowerCase();
+        const isHighlight = queryTokens.length > 0 && queryTokens.some(t => labelLower.includes(t));
+        const confPercent = Math.round((d.confidence || 0) * 100);
+        return `
+          <span class="object-chip ${isHighlight ? 'highlight' : ''}">
+            ${escapeHtml(d.label)} <span class="object-conf">${confPercent}%</span>
+          </span>
+        `;
+      }).join('');
+
+      return `
+        <div class="result-item" data-seek="${dvrOffsetSec}">
+          <div class="result-meta-row">
+            <span class="result-time">${timeStr}</span>
+            <span class="result-dvr-offset">DVR offset: ${dvrOffsetFormatted}</span>
+          </div>
+          <div class="result-segment">${escapeHtml(segmentName)}</div>
+          <div class="result-objects-row">
+            ${chipsHtml}
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    searchResultsContainer.querySelectorAll('.result-item').forEach(item => {
+      item.addEventListener('click', () => {
+        const seekSec = parseFloat(item.getAttribute('data-seek'));
+        if (!isNaN(seekSec)) {
+          seekToTime(seekSec);
+        }
+      });
+    });
+  }
+
+  function formatDuration(totalSec) {
+    const mins = Math.floor(totalSec / 60);
+    const secs = Math.floor(totalSec % 60);
+    return `${mins}m ${secs}s`;
+  }
+
+  function formatMinutesSeconds(totalSec) {
+    const mins = Math.floor(totalSec / 60);
+    const secs = Math.floor(totalSec % 60);
+    return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+  }
+
+  function escapeHtml(str) {
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+
+  initPlayer(LIVE_URL, 'live');
+  pollStats();
+  pollEvents();
+});

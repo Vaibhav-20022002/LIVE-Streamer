@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Genea Live Streamer & AI Monitor</title>
+  <link rel="stylesheet" href="styles.css">
+  <!-- HLS.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.18/dist/hls.min.js"></script>
+</head>
+<body>
+  <div class="app-container">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="header-left">
+        <div class="logo-icon">🎥</div>
+        <h1>Genea Live Streamer & AI Monitor</h1>
+      </div>
+      <div class="header-right">
+        <div class="mode-switcher" role="group" aria-label="Stream Mode">
+          <button id="btn-mode-live" class="mode-btn active" data-mode="live">Live</button>
+          <button id="btn-mode-playback" class="mode-btn" data-mode="playback">Playback (DVR)</button>
+        </div>
+        <button id="btn-live-edge" class="action-btn" title="Jump to Live Edge">Jump to Live Edge</button>
+      </div>
+    </header>
+
+    <!-- Main Grid Layout -->
+    <main class="main-grid">
+      <!-- Left Column: Video & Telemetry -->
+      <section class="video-section">
+        <div class="video-card">
+          <div class="video-container">
+            <video id="video" controls autoplay muted playsinline></video>
+            <!-- Outage / Recovery Status Overlay Banner -->
+            <div id="player-banner" class="player-banner hidden">
+              <div class="banner-content">
+                <span class="spinner"></span>
+                <span id="banner-text">Stream connection interrupted — auto-recovering...</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Read-Only Telemetry Status Bar -->
+          <div class="telemetry-bar">
+            <div class="telemetry-item">
+              <span class="telemetry-label">State</span>
+              <span id="stat-state" class="badge badge-offline">OFFLINE</span>
+            </div>
+            <div class="telemetry-item">
+              <span class="telemetry-label">Pipeline</span>
+              <span id="stat-mode" class="badge badge-neutral">REMUX</span>
+            </div>
+            <div class="telemetry-item">
+              <span class="telemetry-label">Latency</span>
+              <span id="stat-latency" class="telemetry-value">--</span>
+            </div>
+            <div class="telemetry-item">
+              <span class="telemetry-label">FPS (In/Out)</span>
+              <span id="stat-fps" class="telemetry-value">-- / --</span>
+            </div>
+            <div class="telemetry-item telemetry-ai-item">
+              <span class="telemetry-label">AI Inference</span>
+              <div class="ai-inference-content">
+                <span id="stat-ai" class="telemetry-value">--</span>
+                <div id="stat-detections" class="detection-pills"></div>
+              </div>
+            </div>
+            <div class="telemetry-item">
+              <span class="telemetry-label">Resilience & DVR</span>
+              <span id="stat-resilience" class="telemetry-value">0 reconnects | --</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Right Sidebar: Enhanced Object Search -->
+      <aside class="sidebar-section">
+        <div class="sidebar-card">
+          <div class="sidebar-header">
+            <h2>Enhanced Object Search</h2>
+            <span id="result-count" class="result-count">0 results</span>
+          </div>
+
+          <div class="search-controls">
+            <div class="search-input-wrapper">
+              <input type="text" id="search-input" placeholder="Search objects e.g. person, car" autocomplete="off" />
+              <button id="btn-clear-search" class="clear-input-btn" title="Clear search">×</button>
+            </div>
+
+            <div class="search-options-row">
+              <div class="match-mode-toggle">
+                <button type="button" class="match-btn active" data-match="any" title="Match any search term (OR)">Any (OR)</button>
+                <button type="button" class="match-btn" data-match="all" title="Match all search terms (AND)">All (AND)</button>
+              </div>
+
+              <div class="confidence-slider-wrapper">
+                <div class="slider-label-row">
+                  <label for="conf-slider">Min Conf:</label>
+                  <span id="conf-val">0.35</span>
+                </div>
+                <input type="range" id="conf-slider" min="0.10" max="0.95" step="0.05" value="0.35" />
+              </div>
+            </div>
+          </div>
+
+          <div class="search-results-container">
+            <div id="search-results" class="search-results-list">
+              <div class="empty-state">
+                <p>No detection events loaded yet or matching search.</p>
+                <p class="empty-sub">Type object tags above to filter detected frames.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <script src="player.js"></script>
+</body>
+</html>
