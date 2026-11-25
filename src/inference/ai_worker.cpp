@@ -1,3 +1,20 @@
+/// @file ai_worker.cpp
+/// @brief Implements ONNX Runtime lifecycle management, tensor input/output
+/// inspection,
+///        buffer pool integration, sync vs async ring-buffer inference
+///        dispatch, and Docker fresh-clone model fallback.
+///
+/// Architecture & Lifetimes:
+/// - ONNX Runtime: Keeps `Ort::TypeInfo` alive during tensor shape queries
+/// because
+///   `GetTensorTypeAndShapeInfo()` returns a non-owning view.
+/// - Buffer Pool: Uses `ByteBufferPool` to recycle frame buffers across
+/// inference jobs, reducing allocation overhead.
+/// - Async Ring Buffer: `submit_rgb_frame` pushes jobs into a
+/// `DropOldestRingBuffer` (capacity 2),
+///   dropping oldest pending frames under backpressure to ensure real-time
+///   stream processing without lag.
+
 #include "inference/ai_worker.hpp"
 
 #include <algorithm>
@@ -54,15 +71,24 @@ AiWorker::AiWorker(const Config &cfg, StageProfiler &profiler)
 
 #if defined(ENABLE_AI) && ENABLE_AI == 1
   std::error_code ec;
-  if (!cfg_.ai_model_path.empty() &&
-      std::filesystem::exists(cfg_.ai_model_path, ec)) {
+  std::string model_path = cfg_.ai_model_path;
+  if (model_path.empty() || !std::filesystem::exists(model_path, ec)) {
+    if (std::filesystem::exists("/opt/models/yolov8n.onnx", ec)) {
+      model_path = "/opt/models/yolov8n.onnx";
+      log_info("ai",
+               "Configured model not found at '" + cfg_.ai_model_path +
+                   "'; falling back to bundled '/opt/models/yolov8n.onnx'");
+    }
+  }
+
+  if (!model_path.empty() && std::filesystem::exists(model_path, ec)) {
     try {
       Ort::SessionOptions opts;
       opts.SetIntraOpNumThreads(std::max(1, cfg_.ai_threads));
       opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
 
-      impl_->session = std::make_unique<Ort::Session>(
-          impl_->env, cfg_.ai_model_path.c_str(), opts);
+      impl_->session =
+          std::make_unique<Ort::Session>(impl_->env, model_path.c_str(), opts);
 
       Ort::AllocatorWithDefaultOptions allocator;
       if (impl_->session->GetInputCount() > 0) {
@@ -97,19 +123,19 @@ AiWorker::AiWorker(const Config &cfg, StageProfiler &profiler)
         backend_name_ = "onnxruntime";
         active_ = true;
         std::ostringstream ss;
-        ss << "Loaded ONNX model '" << cfg_.ai_model_path
+        ss << "Loaded ONNX model '" << model_path
            << "' input=" << impl_->input_name << " (" << impl_->model_w << "x"
            << impl_->model_h << ") output=" << impl_->output_name
            << " threads=" << std::max(1, cfg_.ai_threads);
         log_info("ai", ss.str());
       } else {
-        log_warn("ai", "ONNX model missing input/output tensor names: " +
-                           cfg_.ai_model_path);
+        log_warn("ai",
+                 "ONNX model missing input/output tensor names: " + model_path);
         impl_->session.reset();
       }
     } catch (const Ort::Exception &e) {
-      log_error("ai", "Failed to load ONNX Runtime model '" +
-                          cfg_.ai_model_path + "': " + e.what());
+      log_error("ai", "Failed to load ONNX Runtime model '" + model_path +
+                          "': " + e.what());
       impl_->session.reset();
     }
   }
@@ -124,11 +150,11 @@ AiWorker::AiWorker(const Config &cfg, StageProfiler &profiler)
                                      0.0f);
       log_info("ai", "Synthetic detection backend enabled");
     } else {
-      log_warn(
-          "ai",
-          "Model unavailable at '" + cfg_.ai_model_path +
-              "'. Export yolov8n_320.onnx via scripts/export_yolov8n.py or set "
-              "SYNTHETIC_DETECTIONS=true.");
+      log_warn("ai",
+               "Model unavailable at '" + cfg_.ai_model_path +
+                   "' and '/opt/models/yolov8n.onnx'. Export yolov8n_320.onnx "
+                   "via scripts/export_yolov8n.py or set "
+                   "SYNTHETIC_DETECTIONS=true.");
       backend_name_ = "disabled";
       active_ = false;
     }

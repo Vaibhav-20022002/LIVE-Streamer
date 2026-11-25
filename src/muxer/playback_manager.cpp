@@ -13,6 +13,20 @@
 #include <sstream>
 #include <system_error>
 
+/// @file playback_manager.cpp
+/// @brief Implements atomic `playback.m3u8` and `events.json` updates,
+/// `#EXT-X-DISCONTINUITY` +
+///        `#EXT-X-MAP` stitching, and live-segment-safe DVR pruning.
+///
+/// Architecture & Invariants:
+/// - Atomic Playlist Updates: Writes `playback.m3u8` and `events.json`
+/// atomically via temporary files
+///   and renaming to prevent partial reads by web clients.
+/// - DVR Pruning: Removes segments exceeding `retention_sec`, while protecting
+/// any segments still referenced
+///   in the active `live.m3u8` sliding window. Adjusts event media timestamps
+///   accordingly.
+
 namespace streamer {
 
 namespace {

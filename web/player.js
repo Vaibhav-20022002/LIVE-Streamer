@@ -32,6 +32,8 @@ document.addEventListener('DOMContentLoaded', () => {
   let reconnectAttempts = 0;
   let backoffDelay = 1000;
   let reconnectTimer = null;
+  let stallWatchdogTimer = null;
+  let mediaRecoveryTimestamps = [];
   let pendingSeekTime = null;
   let eventsData = [];
   let matchMode = 'any';
@@ -39,6 +41,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const LIVE_URL = '/hls/live.m3u8';
   const PLAYBACK_URL = '/hls/playback.m3u8';
+
+  // Enforce muted & non-looping via JS properties (MistServer Chromium autoplay fix)
+  video.muted = true;
+  video.loop = false;
 
   function buildHlsConfig(mode) {
     if (mode === 'playback') {
@@ -54,6 +60,9 @@ document.addEventListener('DOMContentLoaded', () => {
         liveDurationInfinity: false,
         backBufferLength: 1800,
         maxBufferLength: 30,
+        maxMaxBufferLength: 60,
+        manifestLoadingTimeOut: 60000,
+        capLevelToPlayerSize: true,
         manifestLoadingMaxRetry: 100,
         manifestLoadingRetryDelay: 1000,
         fragLoadingMaxRetry: 10
@@ -65,11 +74,41 @@ document.addEventListener('DOMContentLoaded', () => {
       enableWorker: true,
       liveSyncDurationCount: 2,
       liveMaxLatencyDurationCount: 5,
+      maxMaxBufferLength: 60,
+      manifestLoadingTimeOut: 60000,
+      capLevelToPlayerSize: true,
       manifestLoadingMaxRetry: 100,
       manifestLoadingRetryDelay: 1000,
       fragLoadingMaxRetry: 10
     };
   }
+
+  function clearStallWatchdog() {
+    if (stallWatchdogTimer) {
+      clearTimeout(stallWatchdogTimer);
+      stallWatchdogTimer = null;
+    }
+  }
+
+  function armStallWatchdog() {
+    if (stallWatchdogTimer || video.paused) return;
+    stallWatchdogTimer = setTimeout(() => {
+      stallWatchdogTimer = null;
+      if (video.paused || !hls) return;
+      console.warn('Playback stalled for 8s, nudging buffer/live sync...');
+      if (currentMode === 'live' && hls.liveSyncPosition) {
+        video.currentTime = hls.liveSyncPosition;
+      }
+      hls.startLoad();
+    }, 8000);
+  }
+
+  video.addEventListener('waiting', armStallWatchdog);
+  video.addEventListener('stalled', armStallWatchdog);
+  video.addEventListener('playing', clearStallWatchdog);
+  video.addEventListener('timeupdate', clearStallWatchdog);
+  video.addEventListener('pause', clearStallWatchdog);
+  video.addEventListener('ended', clearStallWatchdog);
 
   function applyClampedDvrSeek(offsetSec) {
     if (video.seekable && video.seekable.length > 0) {
@@ -83,6 +122,15 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function initPlayer(url, mode = currentMode) {
+    if (window.location.protocol === 'file:') {
+      updateStateBadge('OFFLINE');
+      showBanner('Open this dashboard over HTTP (e.g. http://localhost:8999) rather than file:// for HLS playback.');
+      return;
+    }
+
+    clearStallWatchdog();
+    mediaRecoveryTimestamps = [];
+
     if (reconnectTimer) {
       clearTimeout(reconnectTimer);
       reconnectTimer = null;
@@ -96,12 +144,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (typeof Hls !== 'undefined' && Hls.isSupported()) {
       hls = new Hls(buildHlsConfig(mode));
-      hls.loadSource(url);
+      // Enforce MistServer/Vision attach-before-load order so MSE initializes before manifest parsing
+      hls.on(Hls.Events.MEDIA_ATTACHED, () => {
+        if (hls) {
+          hls.loadSource(url);
+        }
+      });
       hls.attachMedia(video);
 
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         reconnectAttempts = 0;
         backoffDelay = 1000;
+        mediaRecoveryTimestamps = [];
         hideBanner();
         updateStateBadge('STREAMING');
 
@@ -128,11 +182,28 @@ document.addEventListener('DOMContentLoaded', () => {
             console.warn('HLS network error, scheduling retry:', data.details);
             handleNetworkError();
             break;
-          case Hls.ErrorTypes.MEDIA_ERROR:
-            console.warn('HLS media error, recovering:', data.details);
+          case Hls.ErrorTypes.MEDIA_ERROR: {
+            const now = Date.now();
+            mediaRecoveryTimestamps = mediaRecoveryTimestamps.filter(ts => (now - ts) < 10000);
             updateStateBadge('RECONNECTING');
+
+            if (mediaRecoveryTimestamps.length >= 2) {
+              console.warn('Repeated fatal media errors within 10s, rebuilding player:', data.details);
+              mediaRecoveryTimestamps = [];
+              initPlayer(url, mode);
+              break;
+            }
+
+            if (mediaRecoveryTimestamps.length === 1 && (now - mediaRecoveryTimestamps[0]) < 5000) {
+              console.warn('HLS media error persisted within 5s, swapping audio codec & recovering:', data.details);
+              hls.swapAudioCodec();
+            } else {
+              console.warn('HLS media error, recovering:', data.details);
+            }
+            mediaRecoveryTimestamps.push(now);
             hls.recoverMediaError();
             break;
+          }
           default:
             console.error('Unrecoverable HLS error:', data);
             updateStateBadge('OFFLINE');
@@ -446,6 +517,44 @@ document.addEventListener('DOMContentLoaded', () => {
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#039;');
   }
+
+  // Keyboard shortcuts inspired by Vision/MistServer controls
+  document.addEventListener('keydown', (event) => {
+    if (event.metaKey || event.ctrlKey || event.altKey) return;
+    const activeTag = document.activeElement ? document.activeElement.tagName : '';
+    if (activeTag === 'INPUT' || activeTag === 'TEXTAREA' || activeTag === 'SELECT') return;
+
+    const key = event.key;
+    if (key === ' ' || key === 'k' || key === 'K') {
+      event.preventDefault();
+      if (video.paused) {
+        video.play().catch(() => {});
+      } else {
+        video.pause();
+      }
+    } else if (key === 'm' || key === 'M') {
+      video.muted = !video.muted;
+    } else if (key === 'f' || key === 'F') {
+      const container = video.closest('.video-container') || video;
+      if (document.fullscreenElement) {
+        document.exitFullscreen().catch(() => {});
+      } else if (container.requestFullscreen) {
+        container.requestFullscreen().catch(() => {});
+      }
+    } else if (key === 'l' || key === 'L') {
+      btnLiveEdge.click();
+    } else if ((key === 'ArrowLeft' || key === 'ArrowRight') && currentMode === 'playback') {
+      event.preventDefault();
+      const delta = key === 'ArrowLeft' ? -5 : 5;
+      if (video.seekable && video.seekable.length > 0) {
+        const minTime = video.seekable.start(0);
+        const maxTime = video.seekable.end(video.seekable.length - 1);
+        video.currentTime = Math.max(minTime, Math.min(video.currentTime + delta, maxTime));
+      } else {
+        video.currentTime = Math.max(0, video.currentTime + delta);
+      }
+    }
+  });
 
   initPlayer(LIVE_URL, 'live');
   pollStats();

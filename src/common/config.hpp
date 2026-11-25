@@ -1,3 +1,10 @@
+/// @file config.hpp
+/// @brief Configuration data structures, parsing utilities, and validation
+/// logic for the streaming pipeline.
+///
+/// Defines stream source parameters, HLS segment durations, transcode/remux
+/// modes, AI detection thresholds, and backoff retry timeouts.
+
 #pragma once
 
 #include <string>
@@ -28,11 +35,11 @@ struct Config {
   int playback_retention_sec = 1800;
 
   bool ai_enabled = true;
-  std::string ai_model_path = "/app/models/yolov8n_320.onnx";
-  float ai_conf_threshold = 0.45f;
+  std::string ai_model_path = "/opt/models/yolov8n.onnx";
+  float ai_conf_threshold = 0.35f;
   int ai_threads = 2;
-  std::unordered_set<std::string> ai_target_classes = {"person", "car", "truck",
-                                                       "bicycle"};
+  std::unordered_set<std::string> ai_target_classes = {
+      "person", "car", "truck", "bicycle", "motorcycle", "bus"};
 
   bool ai_sync_mode = false;
   bool use_buffer_pool = true;

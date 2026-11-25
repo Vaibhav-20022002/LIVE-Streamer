@@ -8,6 +8,21 @@ extern "C" {
 #include <algorithm>
 #include <system_error>
 
+/// @file hls_muxer.cpp
+/// @brief Implements FFmpeg fMP4 (`hls_segment_type=fmp4`) muxer
+/// initialization, shared-segment
+///        live window (`live.m3u8`), and DTS monotonicity across stream
+///        reconnects.
+///
+/// Architecture & Invariants:
+/// - fMP4 Muxing: Writes initialization segment (`init_epoch.mp4`) and `.m4s`
+/// media fragments with
+///   `hls_flags=independent_segments+discont_start+temp_file`.
+/// - DTS Monotonicity: Enforces strict monotonically increasing DTS/PTS across
+/// stream reconnects
+///   and discontinuous timestamps to prevent player stalled buffering or demux
+///   errors.
+
 namespace streamer {
 
 namespace {

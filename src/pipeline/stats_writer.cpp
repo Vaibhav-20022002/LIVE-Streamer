@@ -48,6 +48,15 @@ std::string escape_json_string(const std::string &input) {
   return output;
 }
 
+/// Atomic Temp-File-and-Rename JSON Telemetry Updates:
+/// - Writes telemetry JSON to a temporary file (`path.string() + ".tmp"`) in
+/// the same directory.
+/// - Flushes and closes the ofstream to ensure all bytes hit OS file buffers.
+/// - Performs `std::filesystem::rename()` which is an atomic filesystem
+/// operation on POSIX/Windows.
+/// - Fallback: If atomic rename fails across filesystem boundaries, copies file
+/// and removes temp. Guarantee: Nginx or external HTTP polling clients never
+/// observe partial, truncated, or corrupted JSON writes.
 bool write_atomic_file(const std::filesystem::path &path,
                        const std::string &content) {
   std::error_code ec;

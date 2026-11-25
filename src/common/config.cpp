@@ -1,3 +1,7 @@
+/// @file config.cpp
+/// @brief Implementation of .env file parsing, environment variable overrides,
+/// and config validation.
+
 #include "common/config.hpp"
 
 #include <algorithm>

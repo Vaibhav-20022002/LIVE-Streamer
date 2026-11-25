@@ -31,7 +31,7 @@
       <section class="video-section">
         <div class="video-card">
           <div class="video-container">
-            <video id="video" controls autoplay muted playsinline></video>
+            <video id="video" crossorigin="anonymous" controls autoplay muted playsinline></video>
             <!-- Outage / Recovery Status Overlay Banner -->
             <div id="player-banner" class="player-banner hidden">
               <div class="banner-content">
@@ -70,6 +70,15 @@
               <span class="telemetry-label">Resilience & DVR</span>
               <span id="stat-resilience" class="telemetry-value">0 reconnects | --</span>
             </div>
+          </div>
+
+          <!-- Keyboard Shortcut Reference -->
+          <div class="shortcut-hint" aria-label="Player keyboard shortcuts">
+            <span><kbd>Space</kbd> / <kbd>K</kbd> Play/Pause</span>
+            <span><kbd>M</kbd> Mute</span>
+            <span><kbd>F</kbd> Fullscreen</span>
+            <span><kbd>L</kbd> Jump to Live</span>
+            <span><kbd>←</kbd> / <kbd>→</kbd> Seek ±5s (DVR)</span>
           </div>
         </div>
       </section>

@@ -1,3 +1,7 @@
+/// @file source_capture.cpp
+/// @brief Implementation of multi-protocol video capture and AVIOInterruptCB
+/// non-blocking timeout design.
+
 #include "capture/source_capture.hpp"
 
 extern "C" {

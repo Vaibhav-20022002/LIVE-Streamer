@@ -3,6 +3,25 @@
 #include <cmath>
 #include <cstring>
 
+/// @file yolo_postprocess.cpp
+/// @brief Implements COCO class lookup, letterbox scaling math preserving
+/// aspect ratio,
+///        bilinear interpolation RGB-to-NCHW conversion, IoU computation,
+///        class-wise NMS, and YOLOv8 tensor decoding.
+///
+/// Math & Invariants:
+/// - Letterbox: scale = min(dst_w / src_w, dst_h / src_h). Padding: pad_x =
+/// (dst_w - new_w) / 2,
+///   pad_y = (dst_h - new_h) / 2. Letterbox fill value is 114/255.0f.
+/// - Coordinate Un-letterboxing: Given center (cx, cy) and size (w, h) in model
+/// tensor space [dst_w, dst_h],
+///   original image coordinate un-letterboxing is:
+///   x1 = ((cx - 0.5 * w) - pad_x) / scale
+///   y1 = ((cy - 0.5 * h) - pad_y) / scale
+/// - NMS: Sorts candidates descending by confidence score. Suppresses
+/// overlapping bounding boxes
+///   exceeding iou_threshold within the same class_id.
+
 namespace streamer {
 
 static const char *const kCocoClassNames[80] = {

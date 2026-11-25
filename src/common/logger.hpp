@@ -1,3 +1,7 @@
+/// @file logger.hpp
+/// @brief Thread-safe UTC-timestamped structured logger for container and CLI
+/// telemetry.
+
 #pragma once
 
 #include <chrono>

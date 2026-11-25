@@ -1,3 +1,11 @@
+/// @file main.cpp
+/// @brief Main entry point and orchestration loop for the Live Video Streaming
+/// & AI Pipeline.
+///
+/// Coordinates video capture, decoding, optional YOLOv8 ONNX inference with YUV
+/// overlay drawing, HLS stream muxing, DVR playback management, telemetry
+/// publishing, and graceful signal handling (SIGINT/SIGTERM).
+
 #include <atomic>
 #include <chrono>
 #include <csignal>

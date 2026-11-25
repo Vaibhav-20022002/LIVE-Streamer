@@ -1,3 +1,7 @@
+/// @file backoff.hpp
+/// @brief Exponential backoff calculation with symmetric jitter for robust
+/// reconnection logic.
+
 #pragma once
 
 #include <algorithm>

@@ -1,3 +1,10 @@
+/// @file av_raii.hpp
+/// @brief RAII smart pointer wrappers and deleters for FFmpeg Libav C structs.
+///
+/// Ensures strict exception-safe resource ownership and deterministic cleanup
+/// of Libav formats, codecs, frames, packets, scaling contexts, and
+/// dictionaries without manual freeing boilerplate.
+
 #pragma once
 
 #include <chrono>

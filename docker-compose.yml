@@ -3,7 +3,7 @@ services:
     image: bluenviron/mediamtx:1.11.3-ffmpeg
     volumes:
       - ./config/mock-camera.yml:/mediamtx.yml:ro
-      - ./person-bicycle-car-detection.mp4:/media/sample.mp4:ro
+      - ./media:/media:ro
     ports:
       - "8554:8554"
     restart: unless-stopped
@@ -13,7 +13,10 @@ services:
       context: .
       dockerfile: Dockerfile
     env_file:
-      - .env
+      - path: .env.example
+        required: true
+      - path: .env
+        required: false
     volumes:
       - hls_data:/data/hls
       - ./models:/app/models:ro

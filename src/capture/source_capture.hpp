@@ -1,3 +1,10 @@
+/// @file source_capture.hpp
+/// @brief Multi-protocol video source capture module supporting RTSP, V4L2,
+/// AVFoundation, and Lavfi.
+///
+/// Implements non-blocking I/O operations via AVIOInterruptCB and robust stream
+/// reconnection.
+
 #pragma once
 
 #include "capture/av_raii.hpp"

@@ -40,6 +40,12 @@ RUN ORT_RID=$(cat /tmp/ort_rid) && \
     fi && \
     rm -rf /tmp/ort.nupkg /tmp/ort_extract /tmp/ort_rid
 
+# Bundle default COCO-80 YOLOv8n ONNX model so fresh clones run AI inference out of the box
+RUN mkdir -p /opt/models && \
+    (curl -fsSL "https://huggingface.co/Kalray/yolov8/resolve/main/yolov8n.onnx" -o /opt/models/yolov8n.onnx || \
+     curl -fsSL "https://huggingface.co/unileon-robotics/YOLO8-ONNX/resolve/main/yolov8n.onnx" -o /opt/models/yolov8n.onnx) && \
+    test -s /opt/models/yolov8n.onnx
+
 COPY . /src
 WORKDIR /src
 
@@ -61,11 +67,14 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update && apt-get install -y --no-ins
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /opt/onnxruntime/lib /opt/onnxruntime/lib
+COPY --from=builder /opt/models/yolov8n.onnx /opt/models/yolov8n.onnx
 COPY --from=builder /src/build/live_streamer /app/live_streamer
 
 RUN echo "/opt/onnxruntime/lib" > /etc/ld.so.conf.d/onnxruntime.conf && ldconfig
 
-ENV LD_LIBRARY_PATH=/opt/onnxruntime/lib
+ENV LD_LIBRARY_PATH=/opt/onnxruntime/lib \
+    HLS_OUTPUT_DIR=/data/hls \
+    AI_MODEL_PATH=/opt/models/yolov8n.onnx
 
 RUN mkdir -p /data/hls /app/models
 

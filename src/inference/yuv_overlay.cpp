@@ -6,6 +6,22 @@
 #include <cstring>
 #include <string>
 
+/// @file yuv_overlay.cpp
+/// @brief Implements direct planar YUV420P chroma-subsampled (2x2 U/V block)
+/// drawing
+///        and built-in 5x7 bitmap font rendering avoiding RGB roundtrips.
+///
+/// Math & Invariants:
+/// - YUV420P Layout: Y plane has dimensions [width x height], while U and V
+/// planes have
+///   dimensions [(width / 2) x (height / 2)] due to 2x2 chroma subsampling.
+/// - Chroma mapping: A pixel at (x, y) updates Y at index `y * y_stride + x`,
+/// and chroma
+///   U/V at index `(y / 2) * stride + (x / 2)`.
+/// - Font rendering: Uses a 5x7 bitmap font table supporting A-Z, 0-9, '.',
+/// '-', ':', '%', and space.
+///   Each character row is represented by 5 bits (MSB left-aligned).
+
 namespace streamer {
 
 /// 5x7 bitmap font covering A-Z, 0-9, '.', '-', ':', '%', and space (5 bits per
