@@ -1,8 +1,5 @@
 #pragma once
 
-/// @file ai_worker.hpp
-/// @brief Asynchronous/synchronous ONNX Runtime AI inference worker header.
-
 #include "common/config.hpp"
 #include "inference/detection.hpp"
 #include "pipeline/buffer_pool.hpp"
@@ -18,9 +15,6 @@
 
 namespace streamer {
 
-/// @brief Manages inference lifecycle, thread execution, ring-buffer
-/// backpressure,
-///        buffer pools, and ONNX Runtime execution.
 class AiWorker {
 public:
   AiWorker(const Config &cfg, StageProfiler &profiler);
@@ -32,12 +26,8 @@ public:
   void start();
   void stop();
 
-  /// Asynchronous non-blocking submission (drops oldest pending frame on
-  /// backpressure).
   void submit_rgb_frame(const uint8_t *rgb_data, int stride, int width, int height);
 
-  /// Synchronous inference on caller thread (used for Baseline profiling
-  /// comparison).
   std::vector<Detection> infer_sync(const uint8_t *rgb_data, int stride, int width, int height);
 
   std::vector<Detection> latest_detections() const;

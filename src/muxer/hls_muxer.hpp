@@ -1,8 +1,5 @@
 #pragma once
 
-/// @file hls_muxer.hpp
-/// @brief FFmpeg fMP4 HLS muxer header for remuxing and transcoding pipelines.
-
 #include "capture/av_raii.hpp"
 #include "common/config.hpp"
 #include <cstdint>
@@ -10,9 +7,6 @@
 
 namespace streamer {
 
-/// @brief Manages FFmpeg output context, H.264 hardware/software encoding or
-/// stream remuxing,
-///        and fMP4 segment generation (`hls_segment_type=fmp4`).
 class HlsMuxer {
 public:
   explicit HlsMuxer(const Config &cfg);

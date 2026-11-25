@@ -1,7 +1,3 @@
-/// @file logger.hpp
-/// @brief Thread-safe UTC-timestamped structured logger for container and CLI
-/// telemetry.
-
 #pragma once
 
 #include <chrono>
@@ -15,8 +11,6 @@ namespace streamer {
 
 enum class LogLevel { Info, Warn, Error };
 
-/// Thread-safe UTC-timestamped structured logger for container and CLI
-/// telemetry.
 class Logger {
 public:
   static Logger &instance() {

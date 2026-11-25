@@ -1,10 +1,3 @@
-/// @file config.hpp
-/// @brief Configuration data structures, parsing utilities, and validation
-/// logic for the streaming pipeline.
-///
-/// Defines stream source parameters, HLS segment durations, transcode/remux
-/// modes, AI detection thresholds, and backoff retry timeouts.
-
 #pragma once
 
 #include <string>

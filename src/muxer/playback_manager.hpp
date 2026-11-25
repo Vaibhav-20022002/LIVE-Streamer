@@ -1,8 +1,5 @@
 #pragma once
 
-/// @file playback_manager.hpp
-/// @brief DVR playback manager and HLS synchronization header.
-
 #include "inference/detection.hpp"
 #include <cstdint>
 #include <filesystem>
@@ -13,7 +10,6 @@
 
 namespace streamer {
 
-/// @brief Metadata entry for a single completed HLS segment.
 struct SegmentEntry {
   std::string filename;
   std::string init_uri;
@@ -23,7 +19,6 @@ struct SegmentEntry {
   int         seg_number     = -1;
 };
 
-/// @brief Detection event mapped to rolling DVR media timeline.
 struct DetectionEvent {
   int64_t                                    epoch_ms       = 0;
   double                                     media_time_sec = 0.0;
@@ -31,27 +26,16 @@ struct DetectionEvent {
   std::vector<std::pair<std::string, float>> objects;
 };
 
-/// @brief Manages atomic `playback.m3u8` and `events.json` updates,
-/// `#EXT-X-DISCONTINUITY` +
-///        `#EXT-X-MAP` stitching, and live-segment-safe DVR pruning.
 class PlaybackManager {
 public:
   PlaybackManager(std::filesystem::path hls_dir, int retention_sec);
 
-  /// Parses <hls_dir>/live.m3u8 and appends newly completed segments into DVR
-  /// list.
   bool sync_from_live_playlist();
 
-  /// Marks an upcoming discontinuity (e.g. after upstream camera reconnect) and
-  /// new init file.
   void mark_discontinuity(const std::string &new_init_uri);
 
-  /// Records a throttled detection event (~1/sec) mapped to rolling DVR media
-  /// time.
   void record_detections(int64_t epoch_ms, const std::vector<Detection> &dets);
 
-  /// Prunes segments older than retention_sec without touching segments still
-  /// in live.m3u8.
   size_t prune_expired();
 
   bool write_playback_manifest() const;

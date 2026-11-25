@@ -5,15 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Genea Live Streamer & AI Monitor</title>
   <link rel="stylesheet" href="styles.css">
-  <!-- HLS.js CDN -->
   <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.18/dist/hls.min.js"></script>
 </head>
 <body>
   <div class="app-container">
-    <!-- Header -->
     <header class="app-header">
       <div class="header-left">
-        <div class="logo-icon">🎥</div>
+        <span class="brand-dot" aria-hidden="true"></span>
         <h1>Genea Live Streamer & AI Monitor</h1>
       </div>
       <div class="header-right">
@@ -25,14 +23,11 @@
       </div>
     </header>
 
-    <!-- Main Grid Layout -->
     <main class="main-grid">
-      <!-- Left Column: Video & Telemetry -->
       <section class="video-section">
         <div class="video-card">
           <div class="video-container">
             <video id="video" crossorigin="anonymous" controls autoplay muted playsinline></video>
-            <!-- Outage / Recovery Status Overlay Banner -->
             <div id="player-banner" class="player-banner hidden">
               <div class="banner-content">
                 <span class="spinner"></span>
@@ -41,7 +36,6 @@
             </div>
           </div>
 
-          <!-- Read-Only Telemetry Status Bar -->
           <div class="telemetry-bar">
             <div class="telemetry-item">
               <span class="telemetry-label">State</span>
@@ -72,7 +66,6 @@
             </div>
           </div>
 
-          <!-- Keyboard Shortcut Reference -->
           <div class="shortcut-hint" aria-label="Player keyboard shortcuts">
             <span><kbd>Space</kbd> / <kbd>K</kbd> Play/Pause</span>
             <span><kbd>M</kbd> Mute</span>
@@ -83,7 +76,6 @@
         </div>
       </section>
 
-      <!-- Right Sidebar: Enhanced Object Search -->
       <aside class="sidebar-section">
         <div class="sidebar-card">
           <div class="sidebar-header">

@@ -1,7 +1,3 @@
-/// @file source_capture.cpp
-/// @brief Implementation of multi-protocol video capture and AVIOInterruptCB
-/// non-blocking timeout design.
-
 #include "capture/source_capture.hpp"
 
 extern "C" {
@@ -103,7 +99,7 @@ bool SourceCapture::open(std::string &err) {
 
   const AVInputFormat *in_fmt   = nullptr;
   AVDictionary        *raw_opts = nullptr;
-  /// Ensure raw_opts is freed on any exit path.
+  /// Guard raw_opts with av_dict_free on any exit path.
   auto free_opts = [](AVDictionary **d) {
     if (d && *d) {
       av_dict_free(d);
@@ -231,8 +227,7 @@ ReadStatus SourceCapture::read_packet(AVPacket *pkt, std::string &err) {
     return ReadStatus::Error;
   }
 
-  /// Pace local File and un-throttled Lavfi sources to real-time fps without
-  /// throttling live network/device streams.
+  /// Pace local file/lavfi inputs without throttling live streams.
   const bool is_network_url = cfg_.source_url.find("://") != std::string::npos;
   const bool should_pace    = (cfg_.source_type == SourceType::Lavfi) ||
       (cfg_.source_type == SourceType::File && !is_network_url);

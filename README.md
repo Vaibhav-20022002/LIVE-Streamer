@@ -1,42 +1,41 @@
-# High-Performance C++20 Live Video Streaming & AI Inference Solution
+# Live Video Streamer
 
-An end-to-end, pure C++20 **Libav** (`libavformat` / `libavcodec` / `libavdevice` / `libswscale`) live video streaming and edge AI inference engine. Designed for maximum throughput, zero reliance on external streaming servers (zero MediaMTX / zero SRS / zero RTMP daemons), robust network outage resilience, and real-time ONNX object detection with click-to-seek DVR playback.
-
----
-
-## Table of Contents
-1. [Overview & Key Features](#1-overview--key-features)
-2. [Architecture Diagram](#2-architecture-diagram)
-3. [Quick Start (Docker Compose)](#3-quick-start-docker-compose--1-command)
-4. [Native Build & Run (Meson)](#4-native-build--run-meson--macos--ubuntudebian)
-5. [Configuration Reference (`.env`)](#5-configuration-reference-env)
-6. [Testing, Sanitizers & Chaos Verification](#6-testing-sanitizers--chaos-verification)
-7. [Profiling & Performance Results](#7-profiling--performance-results)
+C++20 live video ingest, HLS-fMP4 segmenter, and local ONNX Runtime object detection pipeline built directly on FFmpeg Libav (`libavformat`, `libavcodec`, `libavdevice`, `libswscale`). Supports pass-through H.264/HEVC remuxing, conditional `libx264` transcoding with direct YUV420P bounding-box overlays, rolling DVR playback, and client-side object search.
 
 ---
 
-## 1. Overview & Key Features
-
-- **Pure C++20 Libav Pipeline**: Direct socket and packet handling using FFmpeg/Libav APIs (`avformat_open_input`, `avcodec_send_packet`, `avcodec_receive_frame`, `av_interleaved_write_frame`). No heavy intermediary streaming daemons.
-- **Smart Pass-Through vs. Transcoding**:
-  - *Smart Pass-Through*: Zero-copy H.264/HEVC remuxing (`TRANSCODE_MODE=remux` or `auto`) for minimal CPU usage ($\approx 0.1\,\text{ms}$ frame latency).
-  - *Conditional Transcoding*: Automatic fallback to `libx264` (`preset=ultrafast`) when input codecs require normalization or when AI object overlays are injected.
-- **Dual HLS Stream Architecture**:
-  - **Shared-segment Live (`live.m3u8`)**: Rolling window (`HLS_LIVE_LIST_SIZE=5`, `HLS_SEGMENT_DURATION=2s`) optimized for ultra-low latency playback.
-  - **Rolling DVR Playback (`playback.m3u8`)**: Long-term retention (`PLAYBACK_RETENTION_SEC=1800`) with safe background pruning.
-- **Two-Sided Network Outage Resilience**:
-  - *Upstream*: `AVIOInterruptCB` watchdogs combined with exponential backoff (`RECONNECT_BASE_MS=1000`, `RECONNECT_MAX_MS=30000`) and `#EXT-X-DISCONTINUITY` insertion upon stream drops.
-  - *Downstream*: HLS.js robust auto-recovery handlers for `NETWORK_ERROR` and `MEDIA_ERROR`.
-- **Local AI Object Detection & Enhanced Search**:
-  - ONNX Runtime C++ inference using YOLOv8n (320px input).
-  - Ring buffer drop-oldest concurrency, pooled YUV/RGB buffers, and direct YUV420P bounding box overlay (no RGB roundtrip).
-  - **Enhanced Object Search**: Filter events by classes (e.g. `person, car` with `AND`/`OR` logic) and click-to-seek DVR playback via generated `events.json` telemetry.
-- **Web Player & Telemetry**:
-  - Modern web dashboard at `http://localhost:8999` with real-time read-only live telemetry status bar (`stats.json`).
+## Contents
+1. [Features](#1-features)
+2. [Architecture](#2-architecture)
+3. [Quick Start (Docker)](#3-quick-start-docker)
+4. [Web Player](#4-web-player)
+5. [Native Build (Meson)](#5-native-build-meson)
+6. [Configuration](#6-configuration)
+7. [Tests](#7-tests)
+8. [Benchmarks](#8-benchmarks)
 
 ---
 
-## 2. Architecture Diagram
+## 1. Features
+
+- **Direct Libav Pipeline**: Opens RTSP, V4L2, AVFoundation, `lavfi`, or file inputs in C++ using `avformat_open_input` / `avcodec_send_packet` / `avcodec_receive_frame` / `av_interleaved_write_frame`.
+- **Smart Remux vs. Transcode**:
+  - `TRANSCODE_MODE=auto` remuxes H.264/HEVC streams without decoding when AI is disabled.
+  - Falls back to `libx264` (`preset=ultrafast`) when transcoding is required or when AI overlays are drawn onto decoded frames.
+- **Shared-Segment Live + DVR HLS (`fMP4`)**:
+  - `live.m3u8`: rolling live playlist (`HLS_LIVE_LIST_SIZE=5`, `HLS_SEGMENT_DURATION=2s`).
+  - `playback.m3u8`: DVR playlist retaining up to `PLAYBACK_RETENTION_SEC=1800` of the same `.m4s` segments while background pruning protects active live segments.
+- **Outage Recovery**:
+  - Upstream: `AVIOInterruptCB` read deadlines with jittered exponential backoff (`RECONNECT_BASE_MS`, `RECONNECT_MAX_MS`) and `#EXT-X-DISCONTINUITY` + versioned `init_<epoch>.mp4` rotation on reconnect.
+  - Downstream: HLS.js network/media retry handlers and stall recovery in the browser player.
+- **Local ONNX Inference & YUV Overlay**:
+  - Asynchronous inference worker fed by a capacity-2 drop-oldest ring buffer (`DropOldestRingBuffer`) and recycled frame buffers (`ByteBufferPool`).
+  - YOLOv8 post-processing + per-class NMS with bounding boxes and labels drawn directly onto YUV420P planes (no secondary RGB roundtrip).
+  - Writes throttled detections to `events.json` and pipeline metrics to `stats.json` via atomic temp-file rename.
+
+---
+
+## 2. Architecture
 
 ```text
 +------------------------------------------------------------------------------+
@@ -87,163 +86,158 @@ An end-to-end, pure C++20 **Libav** (`libavformat` / `libavcodec` / `libavdevice
 +------------------------------------------------------------------------------+
 |                                 WEB CLIENT                                   |
 |  * HLS.js Player (Live & DVR Playback + Stall/Network Auto-Recovery)         |
-|  * Read-Only Telemetry Bar (stats.json)                                      |
-|  * Enhanced Object Search & Click-to-Seek DVR (events.json)                  |
+|  * Telemetry Status Bar (stats.json)                                         |
+|  * Object Search & Click-to-Seek DVR (events.json)                           |
 +------------------------------------------------------------------------------+
 ```
 
 ---
 
-## 3. Quick Start (Docker Compose & Standalone Docker)
+## 3. Quick Start (Docker)
 
-### Option A: Docker Compose (1 Command Out-of-the-Box)
-A fresh git clone requires **only 1 command** with zero manual `.env` creation or manual model download/export:
+### Docker Compose
+
+Run the full stack (`mock-camera` simulator, C++ `streamer`, and `nginx` web UI):
 
 ```bash
 docker compose up --build
 ```
 
-#### Why it works instantly:
-- `docker-compose.yml` automatically loads defaults from `.env.example` (with optional `.env` overrides if present).
-- The `Dockerfile` bundles COCO-80 `yolov8n.onnx` at `/opt/models/yolov8n.onnx` out-of-the-box.
-- `mock-camera` automatically streams the first `.mp4` found in `media/` (ignored by git) or falls back to a synthetic `testsrc2` RTSP feed if no `.mp4` clip is provided.
+Then open `http://localhost:8999`.
 
-**Customization:**
-- Drop any custom `.mp4` test clip into `media/` to stream it automatically.
-- Drop a custom ONNX model into `models/` and override `AI_MODEL_PATH` via `.env`.
+Defaults from a fresh clone:
+- `docker-compose.yml` loads `.env.example` and applies `.env` overrides if present.
+- `Dockerfile` bundles COCO-80 `yolov8n.onnx` at `/opt/models/yolov8n.onnx` (and `AiWorker` falls back to it if `AI_MODEL_PATH` is missing).
+- `mock-camera` (`bluenviron/mediamtx`) streams the first `.mp4` found in `media/` (using `-c:v copy` for H.264, or `libx264` otherwise), or falls back to a generated `testsrc2` RTSP stream when `media/` is empty.
 
----
+To test with your own video or model:
+- Copy an `.mp4` file into `media/`.
+- Copy an `.onnx` model into `models/` and set `AI_MODEL_PATH=/app/models/<model>.onnx` in `.env`.
 
-### Option B: Standalone Docker (Single Command with `lavfi`)
-You can also run standalone Docker without Docker Compose using `SOURCE_TYPE=lavfi`:
+### Standalone Container
+
+`live_streamer` writes HLS playlists and `.m4s` segments directly to `HLS_OUTPUT_DIR` (`/data/hls`) and does not embed an HTTP server. To run just the engine against a generated source:
 
 ```bash
-docker build -t custom-streamer . && docker run --rm -p 8999:8999 -e SOURCE_TYPE=lavfi -e SOURCE_URL="testsrc=size=1280x720:rate=30" custom-streamer
+docker build -t live-streamer .
+docker run --rm -v "$(pwd)/hls_out:/data/hls" \
+  -e SOURCE_TYPE=lavfi \
+  -e SOURCE_URL="testsrc2=size=1280x720:rate=30" \
+  live-streamer
 ```
 
 ---
 
-## Web Player & Keyboard Shortcuts
-Access the modern web dashboard at **`http://localhost:8999`**.
+## 4. Web Player
 
-### Key Features:
-- **Live vs. Playback (DVR) Mode Toggle**: Seamlessly switch between ultra-low latency live stream and long-term rolling DVR archive.
-- **Enhanced Object Search**: Filter recorded telemetry events by classes using `AND`/`OR` logic, adjustable confidence threshold, and **click-to-seek DVR** playback.
-- **Automatic Reconnect & Stall Recovery**: Robust underlying HLS.js and C++ AVIO interrupt handlers for seamless recovery from network drops.
-
-### Keyboard Shortcuts:
-- `Space` / `K`: Play / Pause
-- `M`: Mute / Unmute
-- `F`: Toggle Fullscreen
-- `L`: Jump to Live Edge
-- `←` / `→`: Seek backwards / forwards ±5s in DVR mode
+Served from [web/](file:///Users/desperado/Vaibhav/CustomStreamer/Live%20Video%20Streaming%20Soln/web) via Nginx on port `8999`:
+- **Live / Playback (DVR) Toggle**: Switches between `live.m3u8` and `playback.m3u8` without snapping DVR seeks back to the live edge.
+- **Object Search**: Filters detection entries from `events.json` by class tags (`AND`/`OR`) and minimum confidence; clicking a result seeks directly into `playback.m3u8`.
+- **Telemetry Bar**: Displays stream state, mode, live latency / DVR position, ingest & output FPS, AI inference timing, active labels, and reconnect/DVR counters from `stats.json`.
+- **Keyboard Shortcuts**: `Space` / `K` (play/pause), `M` (mute), `F` (fullscreen), `L` (jump to live edge), `←` / `→` (seek ±5s in DVR mode).
 
 ---
 
-## 4. Native Build & Run (Meson — macOS & Ubuntu/Debian)
+## 5. Native Build (Meson)
 
 ### Dependencies
+
 - **macOS (Homebrew)**:
   ```bash
-  brew install meson ninja ffmpeg onnxruntime pkg-config
+  brew install meson ninja ffmpeg onnxruntime
   ```
 - **Ubuntu / Debian**:
   ```bash
-  sudo apt-get update && sudo apt-get install -y meson ninja-build libavformat-dev libavcodec-dev libavutil-dev libavdevice-dev libswscale-dev libonnxruntime-dev pkg-config
+  sudo apt-get update && sudo apt-get install -y \
+    meson ninja-build pkg-config libavformat-dev libavcodec-dev \
+    libavutil-dev libavdevice-dev libswscale-dev libx264-dev
   ```
 
-### Build & Test
+### Compile & Test
+
 ```bash
-# Setup build directory
 meson setup build --buildtype=debugoptimized
-```
-
-*(Note: `.clangd` is configured to read `build/compile_commands.json` generated by `meson setup build` so editors like VS Code / clangd get zero false squiggles automatically).*
-
-```bash
-# Compile
 meson compile -C build
-
-# Run Unit Tests
 meson test -C build --print-errorlogs
 ```
 
-### Running Natively
-Set your desired source type in `.env` (or environment variables) and run the binary:
+`.clangd` is configured to read `build/compile_commands.json` generated by `meson setup build`.
+
+### Run Locally
+
 ```bash
-# Example with lavfi test source or local file
-SOURCE_TYPE=lavfi SOURCE_URL="testsrc=size=1280x720:rate=30" ./build/live_streamer
+mkdir -p hls_out
+SOURCE_TYPE=lavfi SOURCE_URL="testsrc2=size=1280x720:rate=30" HLS_OUTPUT_DIR=./hls_out ./build/live_streamer
 ```
-To serve the web interface and HLS output locally without Docker, point Nginx or a static file server to `web/` and set `HLS_OUTPUT_DIR=hls_out`.
+
+Point Nginx or any static HTTP server at `web/` and alias `/hls/` to `hls_out/`.
 
 ---
 
-## 5. Configuration Reference (`.env`)
+## 6. Configuration
 
-Every variable defined in `.env.example` is detailed below:
+Variables loaded from `.env` (or process environment, which overrides `.env`):
 
 | Variable | Default | Description |
 | :--- | :--- | :--- |
-| `WEB_PORT` | `8999` | Nginx web dashboard listening port. |
-| `HLS_OUTPUT_DIR` | `/data/hls` | Directory where HLS segments (`live.m3u8`, `playback.m3u8`) and JSON telemetry are written. |
-| `SOURCE_TYPE` | `rtsp` | Input source type (`rtsp`, `v4l2`, `avfoundation`, `lavfi`, `file`). |
-| `SOURCE_URL` | `rtsp://mock-camera:8554/live` | Stream URL, device index, or lavfi filter string. |
-| `SOURCE_WIDTH` | `1280` | Input capture width in pixels. |
-| `SOURCE_HEIGHT` | `720` | Input capture height in pixels. |
-| `SOURCE_FPS` | `30` | Target capture framerate. |
-| `TRANSCODE_MODE` | `auto` | Transcoding policy (`auto`, `always`, `remux`). |
-| `ENCODER_PRESET` | `ultrafast` | libx264 encoder preset. |
-| `ENCODER_BITRATE_KBPS` | `2000` | Target video encoding bitrate in Kbps. |
-| `ENCODER_THREADS` | `2` | Number of encoder threads. |
-| `HLS_SEGMENT_DURATION` | `2` | HLS segment duration in seconds. |
-| `HLS_LIVE_LIST_SIZE` | `5` | Number of segments retained in `live.m3u8`. |
-| `PLAYBACK_RETENTION_SEC` | `1800` | Rolling DVR retention window in seconds (30 minutes). |
-| `AI_ENABLED` | `true` | Enable or disable local ONNX object detection. |
-| `AI_MODEL_PATH` | `/opt/models/yolov8n.onnx` | Path to YOLOv8n ONNX model weights. |
-| `AI_CONF_THRESHOLD` | `0.35` | Object detection confidence threshold. |
-| `AI_THREADS` | `2` | ONNX Runtime execution thread count. |
-| `AI_TARGET_CLASSES` | `person,car,truck,bicycle,motorcycle,bus` | Comma-separated list of target classes to detect & index. |
-| `AI_SYNC_MODE` | `false` | Run inference synchronously vs. async ring-buffer drop-oldest. |
-| `USE_BUFFER_POOL` | `true` | Use memory pool for frame allocations. |
-| `SYNTHETIC_DETECTIONS` | `false` | Fallback to synthetic bounding boxes if ONNX model is absent. |
-| `MAX_DURATION_SEC` | `0` | Auto-terminate after N seconds (0 = run indefinitely). |
-| `READ_TIMEOUT_MS` | `5000` | AVIO interrupt timeout threshold in milliseconds. |
-| `RECONNECT_BASE_MS` | `1000` | Initial exponential backoff delay on disconnect. |
-| `RECONNECT_MAX_MS` | `30000` | Maximum exponential backoff delay limit. |
-| `PROFILING_LOG_INTERVAL_SEC` | `5` | Interval for updating `stats.json` and metrics. |
+| `WEB_PORT` | `8999` | Host port mapped to Nginx. |
+| `HLS_OUTPUT_DIR` | `/data/hls` | Output directory for `.m3u8`, `.mp4`, `.m4s`, and `.json` files. |
+| `SOURCE_TYPE` | `rtsp` | Capture backend (`rtsp`, `v4l2`, `avfoundation`, `lavfi`, `file`). |
+| `SOURCE_URL` | `rtsp://mock-camera:8554/live` | RTSP URI, device index/path, file path, or `lavfi` graph. |
+| `SOURCE_WIDTH` | `1280` | Capture/output width in pixels (fallback if container has no metadata). |
+| `SOURCE_HEIGHT` | `720` | Capture/output height in pixels. |
+| `SOURCE_FPS` | `30` | Target framerate for device/synthetic capture. |
+| `TRANSCODE_MODE` | `auto` | `auto` (remux when AI off and H.264/HEVC), `always`, or `remux`. |
+| `ENCODER_PRESET` | `ultrafast` | `libx264` preset. |
+| `ENCODER_BITRATE_KBPS` | `2000` | Target `libx264` bitrate in kbps. |
+| `ENCODER_THREADS` | `2` | `libx264` encoder thread count. |
+| `HLS_SEGMENT_DURATION` | `2` | Target HLS segment duration in seconds. |
+| `HLS_LIVE_LIST_SIZE` | `5` | Number of segments kept in `live.m3u8`. |
+| `PLAYBACK_RETENTION_SEC` | `1800` | Rolling DVR retention window in seconds. |
+| `AI_ENABLED` | `true` | Enable ONNX Runtime object detection and YUV overlay. |
+| `AI_MODEL_PATH` | `/opt/models/yolov8n.onnx` | Path to YOLOv8 `.onnx` model. |
+| `AI_CONF_THRESHOLD` | `0.35` | Minimum class confidence score. |
+| `AI_THREADS` | `2` | ONNX Runtime intra-op thread count. |
+| `AI_TARGET_CLASSES` | `person,car,truck,bicycle,motorcycle,bus` | Comma-separated COCO labels to detect (`*` for all). |
+| `AI_SYNC_MODE` | `false` | Run inference inline on pipeline thread (`true`) or async (`false`). |
+| `USE_BUFFER_POOL` | `true` | Recycle RGB inference buffers via `ByteBufferPool`. |
+| `SYNTHETIC_DETECTIONS` | `false` | Generate synthetic test boxes when no `.onnx` model is loaded. |
+| `MAX_DURATION_SEC` | `0` | Exit cleanly after N seconds (`0` runs until `SIGINT`/`SIGTERM`). |
+| `READ_TIMEOUT_MS` | `5000` | `AVIOInterruptCB` packet read timeout in ms. |
+| `RECONNECT_BASE_MS` | `1000` | Initial reconnect backoff delay in ms. |
+| `RECONNECT_MAX_MS` | `30000` | Maximum reconnect backoff delay in ms. |
+| `PROFILING_LOG_INTERVAL_SEC` | `5` | Interval in seconds for stdout telemetry summary logs. |
 
 ---
 
-## 6. `tests/` Folder & Verification
+## 7. Tests
 
-The `tests/` directory contains active unit suites, integration tests, and chaos verification scripts:
-
-- **`tests/unit_tests.cpp`**: Contains 8 comprehensive test suites:
-  1. Config parsing & validation.
-  2. Drop-oldest ring buffer.
-  3. Pooled buffer lifecycle.
-  4. Exponential backoff.
-  5. YOLOv8 postprocessing / NMS.
-  6. YUV420P overlay bounds clipping.
-  7. `PlaybackManager` DVR manifests (`#EXT-X-DISCONTINUITY` / pruning + atomic JSON).
-  8. `StageProfiler` percentiles.
-  
-  These run **automatically inside every `docker build`** as a verification build gate and locally via `meson test -C build`.
-
-- **`tests/chaos_outage.sh`**: Simulates live upstream & network outages (`--mode local` or `--mode docker`) to validate reconnection backoff and HLS discontinuity recovery.
+- **Unit & Module Tests ([tests/unit_tests.cpp](file:///Users/desperado/Vaibhav/CustomStreamer/Live%20Video%20Streaming%20Soln/tests/unit_tests.cpp))**:
+  Covers `.env` parsing/validation, `DropOldestRingBuffer`, `ByteBufferPool`, `ExponentialBackoff`, YOLOv8 letterbox/decode/NMS, YUV420P overlay clipping, `PlaybackManager` (DVR stitching, discontinuities, segment pruning, atomic JSON), and `StageProfiler` percentiles. Runs during every `docker build` and via `meson test -C build --print-errorlogs`.
+- **AddressSanitizer**:
+  ```bash
+  meson setup build_asan --buildtype=debugoptimized -Db_sanitize=address
+  meson compile -C build_asan && meson test -C build_asan --print-errorlogs
+  ```
+- **Chaos Outage Recovery ([tests/chaos_outage.sh](file:///Users/desperado/Vaibhav/CustomStreamer/Live%20Video%20Streaming%20Soln/tests/chaos_outage.sh))**:
+  Drops the upstream feed mid-stream and checks exponential backoff reconnects and `#EXT-X-DISCONTINUITY` emission in `playback.m3u8`:
+  ```bash
+  ./tests/chaos_outage.sh --mode local
+  ./tests/chaos_outage.sh --mode docker
+  ```
 
 ---
 
-## 7. Profiling & Performance Results
+## 8. Benchmarks
 
-Performance benchmarks measured at **1280×720 @ 30fps** under various pipeline configurations (from [docs/profiling/latest_results.json](docs/profiling/latest_results.json)):
+Measured at **1280×720 @ 30fps** (raw results in [docs/profiling/latest_results.json](docs/profiling/latest_results.json)):
 
-| Pipeline Mode | Frames Processed | AI Inferences | Effective FPS | Decode Avg / P95 (ms) | Inference Avg / P95 (ms) | Encode Avg / P95 (ms) | Total Latency Avg / P95 (ms) | Peak RSS (MB) |
+| Mode | Frames | AI Inferences | FPS | Decode avg/p95 (ms) | Inference avg/p95 (ms) | Encode avg/p95 (ms) | Total Frame avg/p95 (ms) | Peak RSS (MB) |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
 | **Baseline** | 365 | 365 | 30.54 | 0.001 / 0.005 | 0.310 / 0.529 | 1.218 / 1.991 | **4.009 / 5.932** | 40.64 |
 | **Optimized** | 365 | 365 | 30.16 | 0.002 / 0.006 | 0.238 / 0.352 | 2.518 / 3.898 | **3.150 / 5.026** | 46.39 |
 | **Smart Remux** | 365 | 0 | 30.24 | 0.000 / 0.000 | 0.000 / 0.000 | 0.099 / 0.023 | **0.099 / 0.023** | **23.72** |
 
-For an in-depth analysis of memory pooling, ring-buffer threading models, and hardware acceleration, refer to:
+Further details:
 - [Benchmark Report](docs/profiling/benchmark_report.md)
-- [Design Specification](docs/DESIGN.md)
+- [System Design](docs/DESIGN.md)

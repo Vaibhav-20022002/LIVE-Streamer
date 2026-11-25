@@ -13,20 +13,6 @@
 #include <sstream>
 #include <system_error>
 
-/// @file playback_manager.cpp
-/// @brief Implements atomic `playback.m3u8` and `events.json` updates,
-/// `#EXT-X-DISCONTINUITY` +
-///        `#EXT-X-MAP` stitching, and live-segment-safe DVR pruning.
-///
-/// Architecture & Invariants:
-/// - Atomic Playlist Updates: Writes `playback.m3u8` and `events.json`
-/// atomically via temporary files
-///   and renaming to prevent partial reads by web clients.
-/// - DVR Pruning: Removes segments exceeding `retention_sec`, while protecting
-/// any segments still referenced
-///   in the active `live.m3u8` sliding window. Adjusts event media timestamps
-///   accordingly.
-
 namespace streamer {
 
 namespace {
@@ -143,7 +129,6 @@ bool PlaybackManager::sync_from_live_playlist() {
       continue;
     }
 
-    /// Segment URI line
     const std::string &filename = trimmed;
     live_filenames_.insert(filename);
 
@@ -165,8 +150,6 @@ bool PlaybackManager::sync_from_live_playlist() {
       segments_.push_back(std::move(entry));
     }
 
-    /// Reset per-segment tags so an already-known segment's tags do not bleed
-    /// onto the next segment.
     seen_discont = false;
     pending_dur  = 0.0;
     has_extinf   = false;
@@ -266,8 +249,6 @@ size_t PlaybackManager::prune_expired() {
     ++removed_count;
   }
 
-  /// Shift DVR seek offsets so clicking an event in Enhanced Object Search
-  /// still aligns with playback.m3u8 after front segments roll off the window.
   if (removed_dur > 0.0 && !events_.empty()) {
     for (auto &ev : events_) {
       ev.media_time_sec -= removed_dur;
@@ -286,7 +267,6 @@ size_t PlaybackManager::prune_expired() {
     log_info("dvr", ss.str());
   }
 
-  /// Clean up unreferenced init_*.mp4 files.
   std::unordered_set<std::string> referenced_inits;
   if (!current_init_uri_.empty()) {
     referenced_inits.insert(current_init_uri_);
@@ -351,6 +331,7 @@ bool PlaybackManager::write_playback_manifest() const {
     oss << "#EXTINF:" << seg.duration_sec << ",\n" << seg.filename << "\n";
   }
 
+  /// Write atomically via temp file + rename to avoid partial reads.
   return write_atomic_file(hls_dir_ / "playback.m3u8", oss.str());
 }
 
@@ -391,6 +372,7 @@ bool PlaybackManager::write_events_json() const {
   }
   oss << "]\n}\n";
 
+  /// Write atomically via temp file + rename to avoid partial reads.
   return write_atomic_file(hls_dir_ / "events.json", oss.str());
 }
 

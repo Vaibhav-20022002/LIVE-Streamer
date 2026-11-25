@@ -1,29 +1,19 @@
-# Live Video Streaming Solution: System Design Document
+# Live Video Streamer — System Design
 
-## 1. Overview & Design Goals
+## 1. Overview
 
-This document specifies the complete systems architecture for **CustomStreamer**, an open-source, high-performance, end-to-end **C++20** video streaming and AI analytics engine. The system is engineered to handle video ingest, decoding, AI inference, direct graphics overlay, conditional transcoding/remuxing, and low-latency HLS-fMP4 packaging as a monolithic or microservice deployment **without proprietary engines, cloud media brokers, or external middleware** (Zero MediaMTX, Zero GStreamer/FFmpeg CLI wrappers).
+This document describes the architecture of `live_streamer`, a C++20 Libav (`libavformat` / `libavcodec` / `libavdevice` / `libswscale`) streaming and local AI inference engine packaged in a static-HTTP HLS-fMP4 layout.
 
-### Core Design Goals
-- **Zero External Broker Dependency**: Directly implements libavformat/libavcodec/libavutil C++ APIs for ingest, demuxing, decoding, encoding, and fMP4 multiplexing.
-- **Ultra-Low Latency HLS-fMP4**: Delivers end-to-end glass-to-glass latency of **2–4 seconds** using 1-second fragments (`.m4s`) without custom WebRTC signaling servers.
-- **Zero-Copy / Zero-RGB-Roundtrip AI Pipeline**: Integrates ONNX Runtime C++ directly with custom thread-safe ring buffers and direct YUV420P drawing routines.
-- **Unified Live + DVR Playback**: Provides rolling live window streaming alongside full DVR playback without duplicating physical storage blocks on disk.
-- **Enterprise Resilience**: Features robust upstream interruption handling (`AVIOInterruptCB`), downstream Nginx restart recovery, and stateless horizontal scaling for 10,000+ camera sources.
+- **Direct Libav Pipeline**: The core binary handles stream ingest, demuxing, decoding, encoding, and HLS-fMP4 muxing directly through Libav C APIs without an intermediary media server. (`docker-compose.yml` uses MediaMTX only as an optional test camera simulator pushing RTSP.)
+- **HLS-fMP4 Output**: Writes `init_<epoch>.mp4` + `.m4s` fragments (`HLS_SEGMENT_DURATION=2s` by default), paired with rolling `live.m3u8` and DVR `playback.m3u8` playlists.
+- **Direct YUV420P AI Overlay**: Runs YOLOv8 ONNX Runtime inference on a background thread and draws boxes/labels directly onto decoded YUV420P frames without a second RGB conversion.
+- **Two-Sided Outage Handling**: Combines `AVIOInterruptCB` deadlines and jittered exponential backoff in C++ with retry/stall watchdogs in `web/player.js`.
 
 ---
 
-## 2. Protocol & Streaming Architecture
+## 2. Streaming & Packaging Pipeline
 
-### 2.1 Why Pure Libav HLS-fMP4?
-CustomStreamer intentionally rejects RTMP, MPEG-TS, WebRTC, and MediaMTX in favor of **pure Libav-generated HLS with fragmented MP4 (`.m4s`)**:
-- **HTTP / CDN Cacheability**: Standard HTTP/1.1 and HTTP/2 GET requests allow infinite edge caching through simple Nginx/CDN reverse proxies.
-- **Fragmented MP4 (`init.mp4` + `.m4s`)**: Avoids the TS packet overhead and timestamp jitter of MPEG-TS. Allows precise byte-range requests and seamless MSE (Media Source Extensions) ingestion in browsers.
-- **`#EXT-X-DISCONTINUITY` Stream Stitching**: Enables robust stream recovery after camera reconnects, codec changes, or resolution switches without resetting the player session.
-- **Low Container Footprint**: Eliminates complex external media routers, reducing memory footprint per stream to under **35MB RAM**.
-
-### 2.2 Smart Pass-Through vs. Conditional Transcoding
-To optimize CPU utilization, CustomStreamer evaluates each incoming stream's codec and resolution:
+### 2.1 Smart Pass-Through vs. Conditional Transcoding
 
 ```text
 +--------------------------------+
@@ -58,21 +48,20 @@ To optimize CPU utilization, CustomStreamer evaluates each incoming stream's cod
     +------------------+
 ```
 
-1. **Smart Remux Path (`AI_ENABLED=false` + Compatible Codec)**: Packets are demuxed and directly remuxed into fMP4 fragments with zero decode/encode cycles, burning near-zero CPU.
-2. **Conditional Transcode Path (`AI_ENABLED=true` or Incompatible Codec)**: Decoded frames pass through the AI overlay engine and are encoded using `libx264` with preset `ultrafast`, `tune=zerolatency`, and forced keyframe intervals strictly locked to `HLS_SEGMENT_DURATION`.
+1. **Smart Remux (`AI_ENABLED=false` and compatible H.264/HEVC input under `TRANSCODE_MODE=auto` or `remux`)**: Demuxed packets are rescaled and written directly to HLS-fMP4 without decoding or re-encoding.
+2. **Transcode Path (`AI_ENABLED=true`, `TRANSCODE_MODE=always`, or non-H.264/HEVC source)**: Decoded frames are converted via `libswscale` to YUV420P (and RGB24 for AI when enabled), annotated directly in YUV420P, and encoded via `libx264` (`preset=ultrafast`, `tune=zerolatency`, forced keyframes aligned to `HLS_SEGMENT_DURATION`).
 
-### 2.3 Unified Live + Playback DVR Without Storage Duplication
-The storage engine maintains a strict separation between live rolling fragments and archived DVR recordings:
-- **Live Window**: Maintains a rolling window of active segments (e.g., 5 segments of 1s each) referenced by `live.m3u8`.
-- **Playback Manager**: A sidecar `PlaybackManager` thread indexes completed segments into an append-only SQLite/JSON manifest (`events.json`) and generates a master `playback.m3u8` (HLS v7) referencing the exact same `.m4s` blocks on disk.
-- **Zero Duplication**: Segments are written once to disk; the live window prunes expired fragments via a retention policy, while the DVR manager retains archive blocks until disk watermark limits trigger purging.
+### 2.2 Unified Live + DVR Storage
+
+`live.m3u8` and `playback.m3u8` reference the exact same `.m4s` segment files in `HLS_OUTPUT_DIR`:
+- `HlsMuxer` writes `live.m3u8` with `hls_list_size` (`HLS_LIVE_LIST_SIZE`, default 5) and `hls_flags=independent_segments+discont_start+temp_file` (`+append_list` on reconnects).
+- `PlaybackManager` periodically parses `live.m3u8`, tracks active live filenames, appends newly completed segments, writes `playback.m3u8` and `events.json` atomically via temp-file + rename, and deletes expired `.m4s` / unused `init_*.mp4` files older than `PLAYBACK_RETENTION_SEC` while protecting any segment still present in `live.m3u8`.
 
 ---
 
-## 3. AI Inference & Enhanced Object Search
+## 3. AI Inference & Object Search
 
-### 3.1 Decoupled Ring Buffer & ONNX Runtime Pipeline
-To prevent inference bottlenecks from stalling the capture pipeline, CustomStreamer uses a decoupled asynchronous architecture:
+### 3.1 Decoupled Ring Buffer & Worker
 
 ```text
 +-----------------------------------+      +----------------------------------------------+
@@ -89,61 +78,60 @@ To prevent inference bottlenecks from stalling the capture pipeline, CustomStrea
 +-----------------------------------+      +----------------------------------------------+
 ```
 
-- **Bounded Ring Buffer (`capacity=2`)**: If inference lags behind real-time (e.g., under high CPU load), older frames are dropped instantly, guaranteeing zero capture lag or TCP window backpressure.
-- **ByteBufferPool**: Pre-allocated tensor memory pools eliminate malloc/free jitter during high-frequency frame preprocessing.
-- **ONNX Runtime C++**: Executes quantized `YOLOv8n` models compiled with OpenVINO or CUDA execution providers.
+- **Drop-Oldest Queue (`DropOldestRingBuffer`, capacity 2)**: If ONNX inference runs slower than frame capture, the oldest queued frame is evicted so video capture and HLS segment output never stall.
+- **`ByteBufferPool`**: Recycles fixed-size RGB buffers via `std::shared_ptr` custom deleters to avoid repeated heap allocations.
+- **ONNX Runtime C++ Execution**: Runs on CPU (`Ort::Session` with `ORT_ENABLE_ALL`), dynamically inspects tensor dimensions (e.g., `640x640` or `320x320`), handles both `[1, 84, N]` and `[1, N, 84]` output layouts, and applies confidence filtering + per-class NMS.
 
-### 3.2 Zero-RGB-Roundtrip YUV420P Direct Overlay
-Standard pipelines convert YUV420P to RGB, draw bounding boxes using Cairo/OpenCV, and convert back to YUV420P, wasting up to 40% of frame processing time. CustomStreamer implements **direct YUV plane manipulation**:
-- Operates directly on the `AVFrame` data planes (`data[0]` for Y, `data[1]` for U, `data[2]` for V).
-- Draws a crisp `5x7` bitmap font and anti-aliased bounding box borders directly onto luminance (`Y`) and subsampled chrominance (`U`/`V`) buffers with boundary clipping.
+### 3.2 Direct YUV420P Overlay
 
-### 3.3 Enhanced Object Search & DVR Integration
-- **Throttled Event Logging**: Detections (`person`, `car`, `dog`) with confidence scores and normalized bounding boxes are logged asynchronously to `events.json` correlated with monotonic `media_time_sec`.
-- **Direct Seek Queries**: The web frontend submits query parameters (`?classes=person,car&min_conf=0.8&start=...`). The API server parses `events.json`, maps timestamps to exact `.m4s` byte offsets and segments, and commands HLS.js to seek instantly into `playback.m3u8`.
+Instead of converting frames to RGB for drawing and back to YUV420P for encoding, `draw_detections_yuv420p` writes 2px solid borders, dark header strips, and a built-in 5x7 bitmap font directly to `Y`, `U`, and `V` planes (subsampled 2x2) with image-bounds clamping.
+
+### 3.3 Object Search & DVR Seek
+
+- `PlaybackManager::record_detections` logs throttled (~1 Hz) detection records mapped to rolling `media_time_sec` and active `.m4s` segment names in `events.json`.
+- Nginx serves `events.json`, `stats.json`, `live.m3u8`, and `playback.m3u8` as static files.
+- `web/player.js` polls `events.json` and `stats.json`, filters events client-side (`Any`/`All` tags + confidence threshold), and seeks `playback.m3u8` to the matching `media_time_sec` offset when clicked.
 
 ---
 
-## 4. Two-Sided Network Outage & Failure Mode Matrix
+## 4. Failure & Reconnect Behavior
 
-| Failure Scenario | Detection Mechanism | Recovery Behavior |
+| Scenario | Detection | Recovery |
 | :--- | :--- | :--- |
-| **Upstream Camera Drop / TCP Timeout** | `AVIOInterruptCB` callback triggers after configurable read timeout (e.g., 3000ms). | Engine enters reconnection loop with `ExponentialBackoff` (max 30s) + jitter. Inserts `#EXT-X-DISCONTINUITY`, rotates `init_<epoch>.mp4`, and increments monotonic `start_number`. |
-| **Upstream Codec / Resolution Change** | Stream codecpar mismatch detected during packet demuxing. | Flushes current segment ring, triggers encoder/muxer reconfiguration, writes new `init.mp4`, and appends `#EXT-X-DISCONTINUITY` tag to `live.m3u8`. |
-| **Downstream Nginx / CDN Restart** | HTTP 502/504 or socket reset on client player connection. | C++ engine continues segmenting to local NVMe storage uninterrupted. Client HLS.js catches `NETWORK_ERROR`, executes exponential backoff retry, and resumes playback upon proxy recovery. |
-| **Client Wi-Fi Flap / Temporary Disconnect** | Browser playback buffer starves; HLS.js fires `BUFFER_STALLED_ERROR`. | HLS.js pauses playback, retries manifest fetch, and transparently resumes from the live edge or buffered range. |
+| **Upstream camera drop / stall** | `AVIOInterruptCB` aborts blocking I/O after `READ_TIMEOUT_MS` (5000ms default). | Main loop tears down capture/muxer, increments `reconnect_epoch`, calls `PlaybackManager::mark_discontinuity("init_<epoch>.mp4")`, sleeps via jittered `ExponentialBackoff`, and resumes segment numbering monotonically. |
+| **Upstream parameter change** | Reconnect opens fresh `AVFormatContext` & decoder/encoder. | Writes new `init_<epoch>.mp4` and emits `#EXT-X-DISCONTINUITY` + `#EXT-X-MAP` into `playback.m3u8`. |
+| **HTTP proxy / Nginx restart** | Browser HLS.js receives `NETWORK_ERROR`. | `live_streamer` keeps writing to shared disk uninterrupted; `web/player.js` retries with exponential backoff (1s–10s) and resumes. |
+| **Browser buffer stall / decode hiccup** | `<video>` `waiting`/`stalled` or HLS.js `MEDIA_ERROR`. | 8s watchdog nudges to `hls.liveSyncPosition` / restarts load; progressive `recoverMediaError()`, `swapAudioCodec()`, or clean player re-init. |
 
 ---
 
-## 5. Horizontal Scaling Architecture
+## 5. Multi-Camera Scaling Pattern
 
-To scale from a single local camera to enterprise deployments with **10,000+ cameras** and **100,000+ concurrent viewers**, CustomStreamer employs a decoupled tier architecture:
+To scale beyond a single instance:
 
 ```text
 +----------------------------+     Upload .m4s/.m3u8     +-------------------------+     HTTP/2
-| Ingest Tier (StatefulSet)  | ------------------------> | Storage & Origin Tier   | ------------+
-|                            |                           | (S3 / GCS / NVMe Shield)|             |
+| Ingest Tier (StatefulSet)  | ------------------------> | Storage & Origin        | ------------+
+|                            |                           | (NVMe / Object Storage) |             |
 | * Pod 1: Cameras 1..N      |                           +-------------------------+             v
 | * Pod 2: Cameras N..M      |                                                           +---------------+
 +-------------+--------------+                                                           | CDN / Nginx   |
               | Async Events                                                             | Edge Caches   |
               v                                                                          +-------+-------+
 +----------------------------+     +-------------------------+     +-------------------+         |
-| Metadata Messaging         | --> | Object Event Store      | --> | Search API        |         v
-| (Redis Streams / Kafka)    |     | (ClickHouse/TimescaleDB)|     | Gateway           |   [ Viewers 1..K ]
+| Event Queue                | --> | Search Index            | --> | Query Service     |         v
+| (Redis Streams / Kafka)    |     | (ClickHouse / Postgres) |     |                   |   [ Viewers 1..K ]
 +----------------------------+     +-------------------------+     +-------------------+
 ```
 
-### Tier Specifications
-1. **Ingest Tier**: Stateless Kubernetes StatefulSet where each pod manages a sharded subset of cameras ($1:N$ mapping via consistent hashing and lease locking), ensuring an isolated blast radius if a camera stream panics.
-2. **Storage & Origin Tier**: Completed `.m4s` segments and playlists are written to an NVMe local cache and asynchronously synced to S3/GCS object storage with immutable cache control headers (`Cache-Control: public, max-age=31536000, immutable`).
-3. **Delivery Tier**: Multi-region CDN or lightweight Nginx edge caches serve HTTP byte-range requests directly to viewers, resulting in **zero origin load** even during traffic spikes.
-4. **Metadata & Search Tier**: Detection events stream asynchronously via Kafka or Redis Streams into ClickHouse/TimescaleDB, powering sub-second cross-camera object searches across multi-month retention windows.
+1. **Ingest**: Partition camera URLs across stateless workers or Kubernetes pods (`1..N` cameras per worker).
+2. **Origin & CDN**: Serve immutable `.m4s` fragments with long-lived `Cache-Control` headers while keeping `.m3u8` playlists short-TTL (`no-cache`).
+3. **Search Metadata**: Ship per-camera `events.json` batches to an external time-series store for cross-camera queries.
 
 ---
 
 ## 6. Architectural Trade-offs
 
-### 6.1 Latency vs. Reliability Trade-off
-- **Current Approach**: Standard HLS-fMP4 with 1-second segments achieves **2–4 seconds** glass-to-glass latency with 100% CDN cache hit rates and zero packet loss artifacts.
-- **Alternative Considered (LL-HLS / WebRTC)**: Low-Latency HLS (partial segments `hive-part`) or WebRTC reduce latency to <1s but introduce significant signaling complexity, unstable UDP packet loss over cellular networks, and destroy standard CDN edge caching efficiency.
+### 6.1 Standard HLS-fMP4 vs. LL-HLS / WebRTC
+- **Chosen (HLS-fMP4, 2s segments)**: Works over plain static HTTP proxies and CDNs without custom signaling, tolerates brief upstream drops via `#EXT-X-DISCONTINUITY`, and shares one set of `.m4s` files for both Live and DVR modes at ~4–6s end-to-end latency.
+- **Alternative (LL-HLS `EXT-X-PART` / WebRTC)**: Cuts latency below 1s but requires chunked HTTP origin push or stateful ICE/UDP media relays.

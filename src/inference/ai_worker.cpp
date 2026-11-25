@@ -1,20 +1,3 @@
-/// @file ai_worker.cpp
-/// @brief Implements ONNX Runtime lifecycle management, tensor input/output
-/// inspection,
-///        buffer pool integration, sync vs async ring-buffer inference
-///        dispatch, and Docker fresh-clone model fallback.
-///
-/// Architecture & Lifetimes:
-/// - ONNX Runtime: Keeps `Ort::TypeInfo` alive during tensor shape queries
-/// because
-///   `GetTensorTypeAndShapeInfo()` returns a non-owning view.
-/// - Buffer Pool: Uses `ByteBufferPool` to recycle frame buffers across
-/// inference jobs, reducing allocation overhead.
-/// - Async Ring Buffer: `submit_rgb_frame` pushes jobs into a
-/// `DropOldestRingBuffer` (capacity 2),
-///   dropping oldest pending frames under backpressure to ensure real-time
-///   stream processing without lag.
-
 #include "inference/ai_worker.hpp"
 
 #include "common/logger.hpp"
@@ -77,7 +60,7 @@ AiWorker::AiWorker(const Config &cfg, StageProfiler &profiler)
       model_path = "/opt/models/yolov8n.onnx";
       log_info("ai",
           "Configured model not found at '" + cfg_.ai_model_path +
-              "'; falling back to bundled '/opt/models/yolov8n.onnx'");
+              "'; falling back to '/opt/models/yolov8n.onnx'");
     }
   }
 
@@ -95,8 +78,7 @@ AiWorker::AiWorker(const Config &cfg, StageProfiler &profiler)
         if (in_name) {
           impl_->input_name = in_name.get();
         }
-        /// Keep Ort::TypeInfo alive because GetTensorTypeAndShapeInfo() returns
-        /// a non-owning view.
+        /// Keep Ort::TypeInfo alive; GetTensorTypeAndShapeInfo() returns a view.
         auto in_type_info = impl_->session->GetInputTypeInfo(0);
         auto in_info      = in_type_info.GetTensorTypeAndShapeInfo();
         auto shape        = in_info.GetShape();
@@ -401,8 +383,7 @@ std::vector<Detection> AiWorker::run_inference_on_job(const InferenceJob &job) {
     } else
 #endif
         if (backend_name_ == "synthetic") {
-      /// Populate an 84 x 2100 anchor buffer with moving peaks and run real
-      /// YOLOv8 decode + NMS so profiling exercises actual postprocessing work.
+      /// Fill 84 x 2100 anchors so synthetic mode runs decode + NMS.
       std::fill(impl_->synthetic_output.begin(), impl_->synthetic_output.end(), 0.0f);
       auto      synth      = generate_synthetic_detections(job.width, job.height, job.seq);
       const int anchors[2] = {312, 1140};

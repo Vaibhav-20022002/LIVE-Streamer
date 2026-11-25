@@ -40,8 +40,7 @@ void StageProfiler::record(Stage stage, double ms) {
   std::lock_guard<std::mutex> lock(mu_);
   auto                       &ring = rings_[idx];
 
-  /// Ring buffer insertion: if window is not yet full, push back.
-  /// Otherwise, overwrite the oldest sample at write_idx in circular fashion.
+  /// Overwrite oldest sample circularly once the window is full.
   if (ring.samples.size() < kWindowSize) {
     ring.samples.push_back(ms);
   } else {
@@ -70,16 +69,10 @@ StageStats StageProfiler::snapshot(Stage stage) const {
 
   stats.avg_ms = ring.sum_ms / static_cast<double>(ring.total_count);
 
-  /// Copy samples for sorting and percentile calculation.
   std::vector<double> sorted = ring.samples;
   std::sort(sorted.begin(), sorted.end());
 
-  /// Rolling Window Percentile Math (P50/P95/P99):
-  /// - Computes rank index using continuous linear interpolation (e.g., rank =
-  /// p * (N - 1)).
-  /// - Weighted average between lower and upper indices ensures smooth
-  /// percentile estimation
-  ///   without quantization artifacts in small fixed-size sliding windows.
+  /// Linearly interpolate between adjacent ranks for smooth percentiles.
   auto get_percentile = [&](double p) -> double {
     if (sorted.empty()) return 0.0;
     double rank      = p * (sorted.size() - 1);

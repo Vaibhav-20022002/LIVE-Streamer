@@ -1,7 +1,3 @@
-/// @file config.cpp
-/// @brief Implementation of .env file parsing, environment variable overrides,
-/// and config validation.
-
 #include "common/config.hpp"
 
 #include <cctype>
@@ -36,7 +32,7 @@ std::string trim(const std::string &str) {
 }
 
 std::string strip_quotes_and_comment(const std::string &raw) {
-  /// Strip inline '#' comments only when outside single/double quotes.
+  /// Strip inline '#' comments only outside single/double quotes.
   std::string s;
   bool        in_single = false;
   bool        in_double = false;
@@ -246,8 +242,7 @@ Config load_config_from_map(const std::unordered_map<std::string, std::string> &
 Config load_config(const std::string &dotenv_path) {
   auto map = parse_dotenv_file(dotenv_path);
 
-  /// Process environment overrides .env template defaults (12-factor
-  /// precedence).
+  /// Process environment (getenv) overrides .env defaults.
   const char *keys[] = {"WEB_PORT",
       "HLS_OUTPUT_DIR",
       "SOURCE_TYPE",

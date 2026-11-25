@@ -9,21 +9,6 @@ extern "C" {
 #include <filesystem>
 #include <system_error>
 
-/// @file hls_muxer.cpp
-/// @brief Implements FFmpeg fMP4 (`hls_segment_type=fmp4`) muxer
-/// initialization, shared-segment
-///        live window (`live.m3u8`), and DTS monotonicity across stream
-///        reconnects.
-///
-/// Architecture & Invariants:
-/// - fMP4 Muxing: Writes initialization segment (`init_epoch.mp4`) and `.m4s`
-/// media fragments with
-///   `hls_flags=independent_segments+discont_start+temp_file`.
-/// - DTS Monotonicity: Enforces strict monotonically increasing DTS/PTS across
-/// stream reconnects
-///   and discontinuous timestamps to prevent player stalled buffering or demux
-///   errors.
-
 namespace streamer {
 
 namespace {
@@ -78,7 +63,7 @@ bool HlsMuxer::init_hls_output(int init_epoch, std::string &err) {
   }
 
   fmt_ctx_.reset(raw_out);
-  /// Versioned init filename prevents stale MP4 boxes after camera reconnects.
+  /// Versioned init_<epoch>.mp4 avoids stale boxes across reconnects.
   init_filename_ = "init_" + std::to_string(init_epoch) + ".mp4";
   return true;
 }
@@ -118,8 +103,6 @@ bool HlsMuxer::open_remux(const AVStream *in_stream,
     out_stream_ = nullptr;
     return false;
   }
-  /// Clear source container tag so fMP4 muxer writes ISO BMFF-compatible codec
-  /// tags.
   out_stream_->codecpar->codec_tag = 0;
   out_stream_->time_base           = in_stream->time_base;
 
@@ -201,8 +184,6 @@ bool HlsMuxer::open_transcode(int width,
   if (cfg_.encoder_threads > 0) {
     enc_ctx_->thread_count = cfg_.encoder_threads;
   }
-  /// Out-of-band SPS/PPS extradata is required to populate fMP4 init.mp4 moov
-  /// boxes.
   enc_ctx_->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
 
   AVDictionary *raw_enc_opts = nullptr;
@@ -306,6 +287,7 @@ bool HlsMuxer::write_remux_packet(AVPacket *pkt, const AVRational &in_time_base,
   int64_t       dts     = av_rescale_q(rel_dts, in_time_base, out_stream_->time_base);
   int64_t       pts     = av_rescale_q(rel_pts, in_time_base, out_stream_->time_base);
 
+  /// Clamp DTS/PTS strictly monotonic across reconnects.
   if (last_dts_ != AV_NOPTS_VALUE && dts <= last_dts_) {
     dts = last_dts_ + 1;
   }

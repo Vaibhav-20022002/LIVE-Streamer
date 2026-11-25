@@ -3,25 +3,6 @@
 #include <cmath>
 #include <cstring>
 
-/// @file yolo_postprocess.cpp
-/// @brief Implements COCO class lookup, letterbox scaling math preserving
-/// aspect ratio,
-///        bilinear interpolation RGB-to-NCHW conversion, IoU computation,
-///        class-wise NMS, and YOLOv8 tensor decoding.
-///
-/// Math & Invariants:
-/// - Letterbox: scale = min(dst_w / src_w, dst_h / src_h). Padding: pad_x =
-/// (dst_w - new_w) / 2,
-///   pad_y = (dst_h - new_h) / 2. Letterbox fill value is 114/255.0f.
-/// - Coordinate Un-letterboxing: Given center (cx, cy) and size (w, h) in model
-/// tensor space [dst_w, dst_h],
-///   original image coordinate un-letterboxing is:
-///   x1 = ((cx - 0.5 * w) - pad_x) / scale
-///   y1 = ((cy - 0.5 * h) - pad_y) / scale
-/// - NMS: Sorts candidates descending by confidence score. Suppresses
-/// overlapping bounding boxes
-///   exceeding iou_threshold within the same class_id.
-
 namespace streamer {
 
 static const char *const kCocoClassNames[80] = {"person",
@@ -143,7 +124,7 @@ LetterboxInfo letterbox_rgb_to_nchw(const uint8_t *rgb,
   lb.pad_x = pad_x;
   lb.pad_y = pad_y;
 
-  /// Fill out_nchw (3 * dst_w * dst_h floats) with 114.0f / 255.0f
+  /// YOLOv8 letterbox gray pad (114.0f / 255.0f).
   const float fill_val   = 114.0f / 255.0f;
   size_t      plane_size = static_cast<size_t>(dst_w) * dst_h;
   for (size_t i = 0; i < 3 * plane_size; ++i) {
@@ -154,14 +135,10 @@ LetterboxInfo letterbox_rgb_to_nchw(const uint8_t *rgb,
   float *g_plane = out_nchw + plane_size;
   float *b_plane = out_nchw + 2 * plane_size;
 
-  /// Bilinear or nearest sampling from src into letterbox region [pad_y ..
-  /// pad_y + new_h) x [pad_x
-  /// .. pad_x + new_w)
   for (int y = 0; y < new_h; ++y) {
     int dst_y = pad_y + y;
     if (dst_y < 0 || dst_y >= dst_h) continue;
 
-    /// Map y back to src space
     float src_y_f = (y + 0.5f) / scale - 0.5f;
     int   sy0     = static_cast<int>(std::floor(src_y_f));
     int   sy1     = sy0 + 1;
@@ -180,7 +157,7 @@ LetterboxInfo letterbox_rgb_to_nchw(const uint8_t *rgb,
       sx0           = std::clamp(sx0, 0, src_w - 1);
       sx1           = std::clamp(sx1, 0, src_w - 1);
 
-      /// Assuming rgb is packed RGB24 (3 bytes per pixel)
+      /// Assumes packed RGB24 input (3 bytes/pixel, stride = src_w * 3).
       auto get_rgb = [&](int px, int py, int channel) {
         size_t idx = static_cast<size_t>(py) * src_w * 3 + static_cast<size_t>(px) * 3 + channel;
         return static_cast<float>(rgb[idx]) / 255.0f;
@@ -239,7 +216,6 @@ std::vector<Detection> nms_per_class(std::vector<Detection> detections, float io
     return {};
   }
 
-  /// Sort descending by confidence
   std::sort(detections.begin(), detections.end(), [](const Detection &a, const Detection &b) {
     return a.confidence > b.confidence;
   });
@@ -278,14 +254,11 @@ std::vector<Detection> decode_yolov8_output(const float *output,
     return {};
   }
 
-  /// Output tensor is row-major [4 + num_classes, num_anchors]
-  /// row 0: cx, row 1: cy, row 2: w, row 3: h, rows 4 + c: class c score for
-  /// anchor a.
+  /// Row-major [4 + num_classes, num_anchors]: cx, cy, w, h, scores.
   std::vector<Detection> candidates;
   candidates.reserve(num_anchors);
 
   for (int a = 0; a < num_anchors; ++a) {
-    /// Find max class score & class_id
     float max_score = 0.0f;
     int   best_cid  = -1;
 
@@ -313,13 +286,12 @@ std::vector<Detection> decode_yolov8_output(const float *output,
     float w  = output[2 * num_anchors + a];
     float h  = output[3 * num_anchors + a];
 
-    /// Convert from letterbox space to original image coordinates
+    /// Unscale center-size box from letterbox back to source coords.
     float x1 = ((cx - w * 0.5f) - lb.pad_x) / lb.scale;
     float y1 = ((cy - h * 0.5f) - lb.pad_y) / lb.scale;
     float x2 = ((cx + w * 0.5f) - lb.pad_x) / lb.scale;
     float y2 = ((cy + h * 0.5f) - lb.pad_y) / lb.scale;
 
-    /// Clamp to [0, orig_w] and [0, orig_h]
     x1 = std::clamp(x1, 0.0f, static_cast<float>(orig_w));
     y1 = std::clamp(y1, 0.0f, static_cast<float>(orig_h));
     x2 = std::clamp(x2, 0.0f, static_cast<float>(orig_w));

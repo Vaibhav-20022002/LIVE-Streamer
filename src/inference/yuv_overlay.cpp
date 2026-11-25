@@ -6,26 +6,9 @@
 #include <cstring>
 #include <string>
 
-/// @file yuv_overlay.cpp
-/// @brief Implements direct planar YUV420P chroma-subsampled (2x2 U/V block)
-/// drawing
-///        and built-in 5x7 bitmap font rendering avoiding RGB roundtrips.
-///
-/// Math & Invariants:
-/// - YUV420P Layout: Y plane has dimensions [width x height], while U and V
-/// planes have
-///   dimensions [(width / 2) x (height / 2)] due to 2x2 chroma subsampling.
-/// - Chroma mapping: A pixel at (x, y) updates Y at index `y * y_stride + x`,
-/// and chroma
-///   U/V at index `(y / 2) * stride + (x / 2)`.
-/// - Font rendering: Uses a 5x7 bitmap font table supporting A-Z, 0-9, '.',
-/// '-', ':', '%', and space.
-///   Each character row is represented by 5 bits (MSB left-aligned).
-
 namespace streamer {
 
-/// 5x7 bitmap font covering A-Z, 0-9, '.', '-', ':', '%', and space (5 bits per
-/// row).
+/// 5x7 MSB-first bitmap font (5 bits/row: A-Z, 0-9, . - : % space).
 struct FontChar {
   char    c;
   uint8_t rows[7];
@@ -82,7 +65,6 @@ static const uint8_t *get_font_char(char c) {
       return fc.rows;
     }
   }
-  /// Fallback to space
   for (const auto &fc : kFont5x7) {
     if (fc.c == ' ') {
       return fc.rows;
@@ -91,7 +73,6 @@ static const uint8_t *get_font_char(char c) {
   return kFont5x7[0].rows;
 }
 
-/// Color palette per class_id % kPaletteSize in YUV (Y, U, V) tuples
 struct YUVColor {
   uint8_t y;
   uint8_t u;
@@ -99,14 +80,12 @@ struct YUVColor {
 };
 
 static constexpr int  kPaletteSize           = 6;
-static const YUVColor kPalette[kPaletteSize] = {
-    {145, 54, 34},   //< Bright Green (YUV approx)
-    {162, 44, 142},  //< Cyan
-    {226, 30, 85},   //< Yellow
-    {107, 133, 202}, //< Orange / Red-ish
-    {112, 179, 117}, //< Magenta
-    {210, 128, 128}  //< White / Light Gray
-};
+static const YUVColor kPalette[kPaletteSize] = {{145, 54, 34},
+    {162, 44, 142},
+    {226, 30, 85},
+    {107, 133, 202},
+    {112, 179, 117},
+    {210, 128, 128}};
 
 void draw_detections_yuv420p(uint8_t *y_plane,
     int                               y_stride,
@@ -121,6 +100,7 @@ void draw_detections_yuv420p(uint8_t *y_plane,
     return;
   }
 
+  /// YUV420P stores U/V at 2x2 chroma subsampling: (y/2, x/2).
   auto set_pixel_yuv = [&](int x, int y, uint8_t Y, uint8_t U, uint8_t V) {
     if (x < 0 || x >= width || y < 0 || y >= height) {
       return;
@@ -136,7 +116,6 @@ void draw_detections_yuv420p(uint8_t *y_plane,
     int x2 = static_cast<int>(std::round(det.x2));
     int y2 = static_cast<int>(std::round(det.y2));
 
-    /// Clamp box coords to [0, width - 1] / [0, height - 1]
     x1 = std::clamp(x1, 0, width - 1);
     y1 = std::clamp(y1, 0, height - 1);
     x2 = std::clamp(x2, 0, width - 1);
@@ -148,8 +127,6 @@ void draw_detections_yuv420p(uint8_t *y_plane,
 
     YUVColor col = kPalette[std::abs(det.class_id) % kPaletteSize];
 
-    /// Draw 2px thick rectangle border
-    /// Top and bottom borders (rows y1, y1+1, y2-1, y2)
     for (int t = 0; t < 2; ++t) {
       int cur_y1 = y1 + t;
       int cur_y2 = y2 - t;
@@ -164,7 +141,6 @@ void draw_detections_yuv420p(uint8_t *y_plane,
         }
       }
     }
-    /// Left and right borders (cols x1, x1+1, x2-1, x2)
     for (int t = 0; t < 2; ++t) {
       int cur_x1 = x1 + t;
       int cur_x2 = x2 - t;
@@ -180,7 +156,6 @@ void draw_detections_yuv420p(uint8_t *y_plane,
       }
     }
 
-    /// Prepare label text e.g. "PERSON 0.91"
     char        buf[64];
     std::string upper_label = det.label;
     for (auto &ch : upper_label) {
@@ -189,43 +164,36 @@ void draw_detections_yuv420p(uint8_t *y_plane,
     std::snprintf(buf, sizeof(buf), "%s %.2f", upper_label.c_str(), det.confidence);
     std::string text(buf);
 
-    /// Header strip height = 12px, positioned above box or inside top of box if
-    /// y1 < 12
     int strip_h  = 12;
     int strip_y1 = (y1 >= strip_h) ? (y1 - strip_h) : y1;
     int strip_y2 = strip_y1 + strip_h - 1;
 
-    /// Calculate text width: each char is 5 pixels wide + 1 pixel spacing = 6
-    /// pixels per char
     int text_w   = static_cast<int>(text.size()) * 6 - 1;
     int strip_x1 = x1;
     int strip_x2 = std::min(width - 1, x1 + text_w + 4);
 
-    /// Draw filled dark/colored header strip
     for (int sy = strip_y1; sy <= strip_y2; ++sy) {
       for (int sx = strip_x1; sx <= strip_x2; ++sx) {
-        /// Dark background for header strip (Y=32, U=128, V=128) or box color
+        /// Dark neutral background (Y=32, U=128, V=128).
         set_pixel_yuv(sx, sy, 32, 128, 128);
       }
     }
 
-    /// Render text at 1x scale inside header strip
     int cursor_x = strip_x1 + 2;
-    int cursor_y = strip_y1 + (strip_h - 7) / 2; //< vertically centered (7px font height)
+    int cursor_y = strip_y1 + (strip_h - 7) / 2;
 
     for (char c : text) {
       const uint8_t *glyph = get_font_char(c);
       for (int row = 0; row < 7; ++row) {
         uint8_t row_bits = glyph[row];
         for (int col = 0; col < 5; ++col) {
-          /// Bit 4 is leftmost (MSB of 5 bits: 0x10, 0x08, 0x04, 0x02, 0x01)
           if (row_bits & (1 << (4 - col))) {
-            set_pixel_yuv(cursor_x + col, cursor_y + row, 235, 128,
-                128); //< Bright white text
+            /// Bright white text (Y=235, U=128, V=128).
+            set_pixel_yuv(cursor_x + col, cursor_y + row, 235, 128, 128);
           }
         }
       }
-      cursor_x += 6; //< 5 px font + 1 px spacing
+      cursor_x += 6;
     }
   }
 }

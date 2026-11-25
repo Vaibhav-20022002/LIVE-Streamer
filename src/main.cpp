@@ -1,11 +1,3 @@
-/// @file main.cpp
-/// @brief Main entry point and orchestration loop for the Live Video Streaming
-/// & AI Pipeline.
-///
-/// Coordinates video capture, decoding, optional YOLOv8 ONNX inference with YUV
-/// overlay drawing, HLS stream muxing, DVR playback management, telemetry
-/// publishing, and graceful signal handling (SIGINT/SIGTERM).
-
 #include <atomic>
 #include <chrono>
 #include <csignal>
@@ -127,8 +119,7 @@ bool init_transcode_resources(const streamer::Config &cfg,
     return false;
   }
 
-  /// Cap decoder threads to avoid oversubscription alongside libx264 and ONNX
-  /// Runtime.
+  /// Cap decoder threads to avoid oversubscription with libx264/ONNX.
   res.dec_ctx->thread_count = std::max(1, std::min(2, cfg.encoder_threads));
   if (avcodec_open2(res.dec_ctx.get(), dec, nullptr) < 0) {
     err = "Failed to open decoder";
@@ -194,8 +185,7 @@ std::string format_telemetry_line(const std::string &mode,
 int main(int argc, char **argv) {
   std::signal(SIGINT, handle_signal);
   std::signal(SIGTERM, handle_signal);
-  /// Suppress per-segment INFO chatter from Libav HLS muxer while keeping
-  /// warnings/errors.
+  /// Keep AV_LOG_WARNING+ to silence Libav HLS segment INFO chatter.
   av_log_set_level(AV_LOG_WARNING);
 
   const std::string env_path = (argc > 1 && argv[1]) ? argv[1] : ".env";

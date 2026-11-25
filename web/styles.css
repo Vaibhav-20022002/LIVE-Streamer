@@ -73,8 +73,12 @@ body {
   gap: 12px;
 }
 
-.logo-icon {
-  font-size: 24px;
+.brand-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background-color: var(--accent-emerald);
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.2);
 }
 
 .app-header h1 {

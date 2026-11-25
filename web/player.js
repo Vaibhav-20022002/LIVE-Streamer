@@ -3,12 +3,10 @@ document.addEventListener('DOMContentLoaded', () => {
   const playerBanner = document.getElementById('player-banner');
   const bannerText = document.getElementById('banner-text');
 
-  // Mode Switcher & Live Edge Buttons
   const btnLive = document.getElementById('btn-mode-live');
   const btnPlayback = document.getElementById('btn-mode-playback');
   const btnLiveEdge = document.getElementById('btn-live-edge');
 
-  // Telemetry Elements
   const statState = document.getElementById('stat-state');
   const statMode = document.getElementById('stat-mode');
   const statLatency = document.getElementById('stat-latency');
@@ -17,7 +15,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const statDetections = document.getElementById('stat-detections');
   const statResilience = document.getElementById('stat-resilience');
 
-  // Search Elements
   const searchInput = document.getElementById('search-input');
   const btnClearSearch = document.getElementById('btn-clear-search');
   const matchBtns = document.querySelectorAll('.match-btn');
@@ -26,8 +23,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const searchResultsContainer = document.getElementById('search-results');
   const resultCount = document.getElementById('result-count');
 
-  // State Variables
-  let currentMode = 'live'; // 'live' or 'playback'
+  let currentMode = 'live';
   let hls = null;
   let reconnectAttempts = 0;
   let backoffDelay = 1000;
@@ -42,7 +38,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const LIVE_URL = '/hls/live.m3u8';
   const PLAYBACK_URL = '/hls/playback.m3u8';
 
-  // Enforce muted & non-looping via JS properties (MistServer Chromium autoplay fix)
+  // Set via JS property for Chromium autoplay reliability.
   video.muted = true;
   video.loop = false;
 
@@ -144,7 +140,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (typeof Hls !== 'undefined' && Hls.isSupported()) {
       hls = new Hls(buildHlsConfig(mode));
-      // Enforce MistServer/Vision attach-before-load order so MSE initializes before manifest parsing
+      // Attach media before loading source so MSE initializes first.
       hls.on(Hls.Events.MEDIA_ATTACHED, () => {
         if (hls) {
           hls.loadSource(url);
@@ -518,7 +514,6 @@ document.addEventListener('DOMContentLoaded', () => {
       .replace(/'/g, '&#039;');
   }
 
-  // Keyboard shortcuts inspired by Vision/MistServer controls
   document.addEventListener('keydown', (event) => {
     if (event.metaKey || event.ctrlKey || event.altKey) return;
     const activeTag = document.activeElement ? document.activeElement.tagName : '';

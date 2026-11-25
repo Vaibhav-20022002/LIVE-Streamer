@@ -35,5 +35,5 @@
 ## 5. Key Architectural Takeaways
 
 1. **Decoupled AI Pipeline**: Moving preprocessing and inference onto an asynchronous worker fed by a capacity-2 drop-oldest ring buffer decouples frame delivery from AI jitter.
-2. **Direct YUV420P Bounding-Box Drawing**: Direct YUV420P manipulation avoids a secondary YUV $\rightarrow$ RGB $\rightarrow$ YUV color space conversion roundtrip (overlay stage measured at ~0.02 ms).
+2. **Direct YUV420P Bounding-Box Drawing**: Writing boxes directly on Y/U/V planes avoids a secondary `YUV -> RGB -> YUV` conversion roundtrip (overlay stage measured at ~0.02 ms).
 3. **Smart Remux Bypass**: Bypasses decode and encode completely when AI overlay is disabled and input codec is H.264/HEVC, resulting in minimal CPU and memory overhead.

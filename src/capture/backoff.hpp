@@ -1,7 +1,3 @@
-/// @file backoff.hpp
-/// @brief Exponential backoff calculation with symmetric jitter for robust
-/// reconnection logic.
-
 #pragma once
 
 #include <algorithm>
@@ -10,7 +6,7 @@
 
 namespace streamer {
 
-/// Computes bounded exponential backoff delays with symmetric jitter.
+/// Exponential backoff with optional symmetric jitter.
 class ExponentialBackoff {
 public:
   ExponentialBackoff(int base_ms,
