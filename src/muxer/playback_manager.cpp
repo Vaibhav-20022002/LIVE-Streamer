@@ -261,8 +261,8 @@ size_t PlaybackManager::prune_expired() {
     ++removed_count;
   }
 
-  /// Shift DVR seek offsets so clicking an event in Enhanced Object Search still
-  /// aligns with playback.m3u8 after front segments roll off the window.
+  /// Shift DVR seek offsets so clicking an event in Enhanced Object Search
+  /// still aligns with playback.m3u8 after front segments roll off the window.
   if (removed_dur > 0.0 && !events_.empty()) {
     for (auto &ev : events_) {
       ev.media_time_sec -= removed_dur;
