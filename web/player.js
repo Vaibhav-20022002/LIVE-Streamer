@@ -25,9 +25,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
   let currentMode = 'live';
   let hls = null;
+  let hasLoadedManifest = false;
   let reconnectAttempts = 0;
   let backoffDelay = 1000;
   let reconnectTimer = null;
+  let lastAutoConnectTriggerMs = 0;
   let stallWatchdogTimer = null;
   let mediaRecoveryTimestamps = [];
   let pendingSeekTime = null;
@@ -43,6 +45,23 @@ document.addEventListener('DOMContentLoaded', () => {
   video.loop = false;
 
   function buildHlsConfig(mode) {
+    const manifestLoadPolicy = {
+      default: {
+        maxTimeToFirstByteMs: 60000,
+        maxLoadTimeMs: 60000,
+        timeoutRetry: {
+          maxNumRetry: 1,
+          retryDelayMs: 1000,
+          maxRetryDelayMs: 2000
+        },
+        errorRetry: {
+          maxNumRetry: 1,
+          retryDelayMs: 1000,
+          maxRetryDelayMs: 2000
+        }
+      }
+    };
+
     if (mode === 'playback') {
       // playback.m3u8 grows dynamically without #EXT-X-ENDLIST. Disable live-edge
       // latency snapping so seeking anywhere along the DVR timeline stays put.
@@ -57,10 +76,8 @@ document.addEventListener('DOMContentLoaded', () => {
         backBufferLength: 1800,
         maxBufferLength: 30,
         maxMaxBufferLength: 60,
-        manifestLoadingTimeOut: 60000,
         capLevelToPlayerSize: true,
-        manifestLoadingMaxRetry: 100,
-        manifestLoadingRetryDelay: 1000,
+        manifestLoadPolicy,
         fragLoadingMaxRetry: 10
       };
     }
@@ -71,10 +88,8 @@ document.addEventListener('DOMContentLoaded', () => {
       liveSyncDurationCount: 2,
       liveMaxLatencyDurationCount: 5,
       maxMaxBufferLength: 60,
-      manifestLoadingTimeOut: 60000,
       capLevelToPlayerSize: true,
-      manifestLoadingMaxRetry: 100,
-      manifestLoadingRetryDelay: 1000,
+      manifestLoadPolicy,
       fragLoadingMaxRetry: 10
     };
   }
@@ -117,7 +132,7 @@ document.addEventListener('DOMContentLoaded', () => {
     video.play().catch(e => console.warn('Play after seek failed:', e));
   }
 
-  function initPlayer(url, mode = currentMode) {
+  function initPlayer(url, mode = currentMode, preserveBackoff = false) {
     if (window.location.protocol === 'file:') {
       updateStateBadge('OFFLINE');
       showBanner('Open this dashboard over HTTP (e.g. http://localhost:8999) rather than file:// for HLS playback.');
@@ -125,7 +140,13 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     clearStallWatchdog();
+    hasLoadedManifest = false;
     mediaRecoveryTimestamps = [];
+    if (!preserveBackoff) {
+      reconnectAttempts = 0;
+      backoffDelay = 1000;
+      hideBanner();
+    }
 
     if (reconnectTimer) {
       clearTimeout(reconnectTimer);
@@ -136,7 +157,7 @@ document.addEventListener('DOMContentLoaded', () => {
       hls = null;
     }
 
-    hideBanner();
+    updateStateBadge('CONNECTING');
 
     if (typeof Hls !== 'undefined' && Hls.isSupported()) {
       hls = new Hls(buildHlsConfig(mode));
@@ -149,6 +170,7 @@ document.addEventListener('DOMContentLoaded', () => {
       hls.attachMedia(video);
 
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        hasLoadedManifest = true;
         reconnectAttempts = 0;
         backoffDelay = 1000;
         mediaRecoveryTimestamps = [];
@@ -165,6 +187,7 @@ document.addEventListener('DOMContentLoaded', () => {
       });
 
       hls.on(Hls.Events.FRAG_BUFFERED, () => {
+        hasLoadedManifest = true;
         reconnectAttempts = 0;
         backoffDelay = 1000;
         hideBanner();
@@ -172,12 +195,24 @@ document.addEventListener('DOMContentLoaded', () => {
       });
 
       hls.on(Hls.Events.ERROR, (_event, data) => {
-        if (!data.fatal) return;
+        if (!data.fatal) {
+          if (!hasLoadedManifest && data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+            updateStateBadge('CONNECTING');
+            showBanner('Waiting for stream to start...');
+          }
+          return;
+        }
         switch (data.type) {
-          case Hls.ErrorTypes.NETWORK_ERROR:
+          case Hls.ErrorTypes.NETWORK_ERROR: {
+            // hls.startLoad() is a no-op before the first manifest loads; re-init to retry manifest fetch.
+            const reloadManifest = !hasLoadedManifest ||
+              data.details === Hls.ErrorDetails.MANIFEST_LOAD_ERROR ||
+              data.details === Hls.ErrorDetails.MANIFEST_LOAD_TIMEOUT ||
+              data.details === Hls.ErrorDetails.MANIFEST_PARSING_ERROR;
             console.warn('HLS network error, scheduling retry:', data.details);
-            handleNetworkError();
+            handleNetworkError(reloadManifest);
             break;
+          }
           case Hls.ErrorTypes.MEDIA_ERROR: {
             const now = Date.now();
             mediaRecoveryTimestamps = mediaRecoveryTimestamps.filter(ts => (now - ts) < 10000);
@@ -186,7 +221,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (mediaRecoveryTimestamps.length >= 2) {
               console.warn('Repeated fatal media errors within 10s, rebuilding player:', data.details);
               mediaRecoveryTimestamps = [];
-              initPlayer(url, mode);
+              initPlayer(url, mode, true);
               break;
             }
 
@@ -213,6 +248,10 @@ document.addEventListener('DOMContentLoaded', () => {
       video.src = url;
       video.load();
       video.addEventListener('loadedmetadata', () => {
+        hasLoadedManifest = true;
+        reconnectAttempts = 0;
+        backoffDelay = 1000;
+        hideBanner();
         updateStateBadge('STREAMING');
         if (mode === 'playback' && pendingSeekTime !== null) {
           const target = pendingSeekTime;
@@ -223,8 +262,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       }, { once: true });
       video.addEventListener('error', () => {
-        updateStateBadge('OFFLINE');
-        showBanner('Stream playback error encountered.');
+        handleNetworkError(true);
       }, { once: true });
     } else {
       updateStateBadge('OFFLINE');
@@ -232,24 +270,32 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  function handleNetworkError() {
+  function handleNetworkError(reloadManifest = false) {
     reconnectAttempts++;
-    updateStateBadge('RECONNECTING');
+    const waitingForBoot = !hasLoadedManifest;
+    updateStateBadge(waitingForBoot ? 'CONNECTING' : 'RECONNECTING');
 
-    const sec = Math.round(backoffDelay / 1000);
-    showBanner(`Stream connection interrupted — auto-recovering in ${sec}s (Attempt ${reconnectAttempts})...`);
+    const sec = Math.max(1, Math.round(backoffDelay / 1000));
+    showBanner(
+      waitingForBoot
+        ? `Waiting for stream — retrying in ${sec}s (Attempt ${reconnectAttempts})...`
+        : `Stream connection interrupted — auto-recovering in ${sec}s (Attempt ${reconnectAttempts})...`
+    );
 
     if (reconnectTimer) clearTimeout(reconnectTimer);
 
     reconnectTimer = setTimeout(() => {
-      if (hls) {
-        hls.startLoad();
+      reconnectTimer = null;
+      if (reloadManifest || !hasLoadedManifest || !hls) {
+        initPlayer(currentMode === 'live' ? LIVE_URL : PLAYBACK_URL, currentMode, true);
       } else {
-        initPlayer(currentMode === 'live' ? LIVE_URL : PLAYBACK_URL, currentMode);
+        hls.startLoad();
       }
     }, backoffDelay);
 
-    backoffDelay = Math.min(backoffDelay * 2, 10000);
+    backoffDelay = waitingForBoot
+      ? Math.min(Math.round(backoffDelay * 1.5), 3000)
+      : Math.min(backoffDelay * 2, 10000);
   }
 
   function showBanner(msg) {
@@ -348,6 +394,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
       if (stats.state === 'reconnecting' && currentMode === 'live') {
         updateStateBadge('RECONNECTING');
+      } else if (!hasLoadedManifest && stats.state === 'streaming' && stats.active_live_segments > 0) {
+        const now = Date.now();
+        if ((now - lastAutoConnectTriggerMs) >= 1500) {
+          lastAutoConnectTriggerMs = now;
+          if (reconnectTimer) {
+            clearTimeout(reconnectTimer);
+            reconnectTimer = null;
+          }
+          initPlayer(currentMode === 'live' ? LIVE_URL : PLAYBACK_URL, currentMode, true);
+        }
       }
     } catch (_err) {
       // Ignore transient telemetry fetch errors during network interruptions

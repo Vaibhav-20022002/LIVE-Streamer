@@ -16,36 +16,39 @@ This document describes the architecture of `live_streamer`, a C++20 Libav (`lib
 ### 2.1 Smart Pass-Through vs. Conditional Transcoding
 
 ```text
-+--------------------------------+
-| RTSP / Camera Stream Ingest    |
-+---------------+----------------+
-                |
-                v
-         [ AI Enabled? ]
-          /           \
-       (No)           (Yes)
-        /               \
-       v                 v
-[ Codec H.264/HEVC? ]   [ Decode to AVFrame (YUV420P) ]
-     /        \                   |
-  (Yes)       (No)                v
-   /            \       [ ONNX Runtime YOLOv8n Inference ]
-  v              |                |
-[ Smart Remux ]  |                v
-[ (Zero-Copy) ]  |      [ YUV420P Direct Bitmap Overlay ]
-  |              |                |
-  |              +-------+--------+
-  |                      |
-  |                      v
++-------------------------------------+
+|   RTSP / Camera Stream Ingest       |
++------------------+------------------+
+                   |
+                   v
+           [ AI Enabled? ]
+            /           \
+         (No)           (Yes)
+          /               \
+         v                 v
+[ Codec H.264/HEVC? ]   [ Libav Decode + sws_scale ]
+     /        \         [ (YUV420P + RGB24)        ]
+  (Yes)       (No)                 |
+   /            \                  v
+  v              v      [ Async AI Inference +     ]
+[ Smart Remux ]  |      [ YUV420P Direct Overlay   ]
+[ (Zero-Copy) ]  |                 |
+  |              v                 |
+  |     [ Libav Decode + ]         |
+  |     [ sws_scale(YUV) ]         |
+  |              |                 |
+  |              +--------+--------+
+  |                       |
+  |                       v
   |              [ libx264 Transcode ]
-  |              [ (preset=ultrafast) ]
-  |                      |
-  +----------+-----------+
-             |
-             v
-    +------------------+
-    | HLS-fMP4 Muxer   |
-    +------------------+
+  |              [ (ultrafast)       ]
+  |                       |
+  +-----------+-----------+
+              |
+              v
+     +------------------+
+     | HLS-fMP4 Muxer   |
+     +------------------+
 ```
 
 1. **Smart Remux (`AI_ENABLED=false` and compatible H.264/HEVC input under `TRANSCODE_MODE=auto` or `remux`)**: Demuxed packets are rescaled and written directly to HLS-fMP4 without decoding or re-encoding.
@@ -64,18 +67,23 @@ This document describes the architecture of `live_streamer`, a C++20 Libav (`lib
 ### 3.1 Decoupled Ring Buffer & Worker
 
 ```text
-+-----------------------------------+      +----------------------------------------------+
-|          INGEST THREAD            |      |               AI WORKER THREAD             |
-|                                   |      |                                              |
-| [ AVPacket Capture & Decode ]     |      | [ ByteBufferPool ] -> [ ONNX YOLOv8n ]       |
-|               |                   |      |                             |                |
-|               v                   |      |                             v                |
-|  (Push RGB/YUV Frame)             |      |                  (Bounding Boxes + Labels)   |
-|               |                   |      |                             |                |
-|               +---> [ Drop-Oldest RingBuffer (cap=2) ] ----------------+                |
-|                                   |      |                             v                |
-|                                   |      |                  [ YUV420P Direct Overlay ]  |
-+-----------------------------------+      +----------------------------------------------+
++-----------------------------------------+        +----------------------------------------+
+|          MAIN PIPELINE THREAD           |        |            AI WORKER THREAD            |
+|                                         |        |                                        |
+|  [ Demux -> Decode -> sws_scale ]       |        |  [ DropOldestRingBuffer (cap=2) ]      |
+|       |                        |        |        |                  |                     |
+|       | RGB24                  | YUV420P|        |                  v                     |
+|       | (ByteBufferPool copy)  |        |        |  [ Letterbox -> ONNX Runtime -> NMS ]  |
+|       +====== push ============================> |                  |                     |
+|                                |        |        |                  v                     |
+|                                v        |        |  [ Update latest_detections_ ]         |
+|                     +-------------------+        +------------------+---------------------+
+|                     | YUV420P Overlay   | <-------------------------+ reads latest boxes
+|                     +---------+---------+                             & logs events.json
+|                               |
+|                               v
+|                     [ libx264 -> HlsMuxer ]
++-----------------------------------------+
 ```
 
 - **Drop-Oldest Queue (`DropOldestRingBuffer`, capacity 2)**: If ONNX inference runs slower than frame capture, the oldest queued frame is evicted so video capture and HLS segment output never stall.
@@ -111,17 +119,18 @@ To scale beyond a single instance:
 
 ```text
 +----------------------------+     Upload .m4s/.m3u8     +-------------------------+     HTTP/2
-| Ingest Tier (StatefulSet)  | ------------------------> | Storage & Origin        | ------------+
-|                            |                           | (NVMe / Object Storage) |             |
-| * Pod 1: Cameras 1..N      |                           +-------------------------+             v
-| * Pod 2: Cameras N..M      |                                                           +---------------+
-+-------------+--------------+                                                           | CDN / Nginx   |
-              | Async Events                                                             | Edge Caches   |
-              v                                                                          +-------+-------+
-+----------------------------+     +-------------------------+     +-------------------+         |
-| Event Queue                | --> | Search Index            | --> | Query Service     |         v
-| (Redis Streams / Kafka)    |     | (ClickHouse / Postgres) |     |                   |   [ Viewers 1..K ]
-+----------------------------+     +-------------------------+     +-------------------+
+| Ingest Tier (StatefulSet)  | ------------------------> | Storage & Origin        | -----------------+
+|                            |                           | (NVMe / Object Storage) |                  |
+| * Pod 1: Cameras 1..N      |                           +-------------------------+                  v
+| * Pod 2: Cameras N..M      |                                                               +---------------+
++-------------+--------------+                                                               | CDN / Nginx   |
+              | Async Events                                                                 | Edge Caches   |
+              v                                                                              +-------+-------+
++----------------------------+     +-------------------------+     +-------------------+             |
+| Event Queue                | --> | Search Index            | --> | Query Service     | ----+       |
+| (Redis Streams / Kafka)    |     | (ClickHouse / Postgres) |     | (JSON / HTTP API) |     |       |
++----------------------------+     +-------------------------+     +-------------------+     v       v
+                                                                                         [ Viewers 1..K ]
 ```
 
 1. **Ingest**: Partition camera URLs across stateless workers or Kubernetes pods (`1..N` cameras per worker).
