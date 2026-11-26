@@ -37,14 +37,19 @@ document.addEventListener('DOMContentLoaded', () => {
   let stallWatchdogTimer = null;
   let mediaRecoveryTimestamps = [];
   let pendingSeekTime = null;
+  let playerSessionTag = Date.now();
   let eventsData = [];
   let matchMode = 'any';
   let minConfidence = parseFloat(confSlider.value) || 0.35;
 
-  function getStreamUrls() {
-    const prefix = (activeStream && activeStream.hls_prefix)
-      ? activeStream.hls_prefix.replace(/\/+$/, '')
+  function getStreamPrefix(streamObj) {
+    return (streamObj && streamObj.hls_prefix)
+      ? streamObj.hls_prefix.replace(/\/+$/, '')
       : '/hls';
+  }
+
+  function getStreamUrls() {
+    const prefix = getStreamPrefix(activeStream);
     return {
       live: `${prefix}/live.m3u8`,
       playback: `${prefix}/playback.m3u8`,
@@ -66,17 +71,15 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  function selectStream(streamId, forceReload = false) {
+  function selectStream(streamId, forceReload = false, initialSeekSec = null) {
     const found = streamsList.find(s => s.id === streamId);
     if (!found) return;
     if (!forceReload && activeStream && activeStream.id === found.id) return;
 
     activeStream = found;
     streamSelect.value = found.id;
-    pendingSeekTime = null;
-    eventsData = [];
+    pendingSeekTime = initialSeekSec;
     statDetections.innerHTML = '';
-    renderSearchResults();
 
     const urls = getStreamUrls();
     initPlayer(currentMode === 'live' ? urls.live : urls.playback, currentMode);
@@ -140,7 +143,28 @@ document.addEventListener('DOMContentLoaded', () => {
   video.muted = true;
   video.loop = false;
 
+  function appendCacheBust(targetUrl, tag) {
+    if (!targetUrl || /[?&]cb=/.test(targetUrl)) return targetUrl;
+    const sep = targetUrl.includes('?') ? '&' : '?';
+    return `${targetUrl}${sep}cb=${tag}`;
+  }
+
   function buildHlsConfig(mode) {
+    const BaseLoader = (typeof Hls !== 'undefined' && Hls.DefaultConfig && Hls.DefaultConfig.loader)
+      ? Hls.DefaultConfig.loader
+      : null;
+
+    class CacheBustedLoader extends (BaseLoader || Object) {
+      load(context, config, callbacks) {
+        if (context && context.url) {
+          context.url = appendCacheBust(context.url, playerSessionTag);
+        }
+        return super.load(context, config, callbacks);
+      }
+    }
+
+    const loaderOption = BaseLoader ? { loader: CacheBustedLoader } : {};
+
     const manifestLoadPolicy = {
       default: {
         maxTimeToFirstByteMs: 60000,
@@ -162,6 +186,7 @@ document.addEventListener('DOMContentLoaded', () => {
       // playback.m3u8 grows dynamically without #EXT-X-ENDLIST. Disable live-edge
       // latency snapping so seeking anywhere along the DVR timeline stays put.
       return {
+        ...loaderOption,
         lowLatencyMode: false,
         enableWorker: true,
         startPosition: pendingSeekTime !== null ? pendingSeekTime : 0,
@@ -179,6 +204,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     return {
+      ...loaderOption,
       lowLatencyMode: false,
       enableWorker: true,
       liveSyncDurationCount: 2,
@@ -238,6 +264,7 @@ document.addEventListener('DOMContentLoaded', () => {
     clearStallWatchdog();
     hasLoadedManifest = false;
     mediaRecoveryTimestamps = [];
+    playerSessionTag = Date.now();
     if (!preserveBackoff) {
       reconnectAttempts = 0;
       backoffDelay = 1000;
@@ -315,9 +342,9 @@ document.addEventListener('DOMContentLoaded', () => {
             updateStateBadge('RECONNECTING');
 
             if (mediaRecoveryTimestamps.length >= 2) {
-              console.warn('Repeated fatal media errors within 10s, rebuilding player:', data.details);
+              console.warn('Repeated fatal media errors within 10s, scheduling backoff rebuild:', data.details);
               mediaRecoveryTimestamps = [];
-              initPlayer(url, mode, true);
+              handleNetworkError(true);
               break;
             }
 
@@ -341,7 +368,7 @@ document.addEventListener('DOMContentLoaded', () => {
       });
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
       // Native HLS fallback (Safari)
-      video.src = url;
+      video.src = appendCacheBust(url, playerSessionTag);
       video.load();
       video.addEventListener('loadedmetadata', () => {
         hasLoadedManifest = true;
@@ -450,7 +477,15 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  function seekToTime(targetSec) {
+  function seekToTime(targetSec, targetStreamId = null) {
+    if (targetStreamId && (!activeStream || activeStream.id !== targetStreamId)) {
+      currentMode = 'playback';
+      btnPlayback.classList.add('active');
+      btnLive.classList.remove('active');
+      selectStream(targetStreamId, true, targetSec);
+      return;
+    }
+
     if (currentMode !== 'playback') {
       pendingSeekTime = targetSec;
       switchMode('playback');
@@ -466,10 +501,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function pollStats() {
     if (!activeStream) return;
+    const requestedId = activeStream.id;
     try {
       const response = await fetch(getStreamUrls().stats, { cache: 'no-store' });
       if (!response.ok) return;
       const stats = await response.json();
+      if (!activeStream || activeStream.id !== requestedId) return;
 
       if (stats.mode) {
         statMode.textContent = stats.mode.toUpperCase();
@@ -540,18 +577,39 @@ document.addEventListener('DOMContentLoaded', () => {
   setInterval(pollStats, 1000);
 
   async function pollEvents() {
-    if (!activeStream) return;
-    try {
-      const response = await fetch(getStreamUrls().events, { cache: 'no-store' });
-      if (!response.ok) return;
-      const data = await response.json();
-      const list = Array.isArray(data) ? data : (Array.isArray(data.events) ? data.events : null);
-      if (list) {
-        eventsData = list;
-        renderSearchResults();
+    const targets = streamsList.length > 0
+      ? streamsList
+      : (activeStream ? [activeStream] : []);
+    if (targets.length === 0) return;
+
+    const merged = [];
+    let anySucceeded = false;
+
+    await Promise.all(targets.map(async (s) => {
+      try {
+        const prefix = getStreamPrefix(s);
+        const response = await fetch(`${prefix}/events.json`, { cache: 'no-store' });
+        if (!response.ok) return;
+        const data = await response.json();
+        const list = Array.isArray(data) ? data : (Array.isArray(data.events) ? data.events : null);
+        if (!list) return;
+        anySucceeded = true;
+        const streamLabel = s.name || s.id;
+        list.forEach(ev => {
+          merged.push({
+            ...ev,
+            _streamId: s.id,
+            _streamName: streamLabel
+          });
+        });
+      } catch (_err) {
+        // Ignore transient per-stream event index fetch errors
       }
-    } catch (_err) {
-      // Ignore transient event index fetch errors
+    }));
+
+    if (anySucceeded) {
+      eventsData = merged;
+      renderSearchResults();
     }
   }
 
@@ -632,10 +690,16 @@ document.addEventListener('DOMContentLoaded', () => {
         `;
       }).join('');
 
+      const streamId = ev._streamId || (activeStream ? activeStream.id : '');
+      const streamLabel = ev._streamName || streamId || 'stream';
+
       return `
-        <div class="result-item" data-seek="${dvrOffsetSec}">
+        <div class="result-item" data-seek="${dvrOffsetSec}" data-stream-id="${escapeHtml(streamId)}">
           <div class="result-meta-row">
-            <span class="result-time">${timeStr}</span>
+            <div class="result-meta-left">
+              <span class="result-stream-badge">${escapeHtml(streamLabel)}</span>
+              <span class="result-time">${timeStr}</span>
+            </div>
             <span class="result-dvr-offset">DVR offset: ${dvrOffsetFormatted}</span>
           </div>
           <div class="result-segment">${escapeHtml(segmentName)}</div>
@@ -649,8 +713,9 @@ document.addEventListener('DOMContentLoaded', () => {
     searchResultsContainer.querySelectorAll('.result-item').forEach(item => {
       item.addEventListener('click', () => {
         const seekSec = parseFloat(item.getAttribute('data-seek'));
+        const targetStreamId = item.getAttribute('data-stream-id');
         if (!isNaN(seekSec)) {
-          seekToTime(seekSec);
+          seekToTime(seekSec, targetStreamId);
         }
       });
     });

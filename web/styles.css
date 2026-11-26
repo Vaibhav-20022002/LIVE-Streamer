@@ -109,18 +109,35 @@ body {
 }
 
 .stream-select {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
   background-color: var(--bg-main);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 12px 12px;
   border: 1px solid var(--border-color);
   color: var(--text-main);
   font-family: var(--font-mono);
   font-size: 12px;
   font-weight: 500;
-  padding: 6px 10px;
+  height: 34px;
+  line-height: 1;
+  padding: 0 30px;
   border-radius: 8px;
   outline: none;
   cursor: pointer;
   min-width: 140px;
+  text-align: center;
+  text-align-last: center;
   transition: border-color 0.2s ease;
+}
+
+.stream-select option {
+  background-color: var(--bg-card);
+  color: var(--text-main);
+  text-align: center;
 }
 
 .stream-select:focus,
@@ -606,9 +623,28 @@ video {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
   font-size: 11px;
   color: var(--text-muted);
   font-family: var(--font-mono);
+}
+
+.result-meta-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.result-stream-badge {
+  background-color: rgba(245, 158, 11, 0.14);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  color: var(--accent-amber);
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 4px;
+  flex-shrink: 0;
 }
 
 .result-time {
