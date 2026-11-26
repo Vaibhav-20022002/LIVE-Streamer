@@ -420,11 +420,50 @@ TEST_CASE(test_playback_manager_and_stats) {
 
   REQUIRE(streamer::write_stats_json(tmp_hls, metrics));
 
+  std::vector<streamer::StreamDescriptor> descriptors = {
+      {"cam1", "cam1", "rtsp", "/hls/cam1"},
+      {"cam2", "cam2", "lavfi", "/hls/cam2"},
+  };
+  std::string streams_json = streamer::serialize_streams_json(descriptors, "cam1");
+  REQUIRE(streams_json.find("\"default_stream\":\"cam1\"") != std::string::npos);
+  REQUIRE(streams_json.find("/hls/cam2") != std::string::npos);
+  REQUIRE(streamer::write_streams_json(tmp_hls, descriptors, "cam1"));
+  REQUIRE(std::filesystem::exists(tmp_hls / "streams.json"));
+
   /// Cleanup temp dir
   std::filesystem::remove_all(tmp_hls);
 }
 
-/// 8. StageProfiler
+/// 8. Multi-stream config parsing & duplicate ID check
+TEST_CASE(test_multi_stream_config) {
+  auto parsed =
+      streamer::parse_streams_spec("cam1=rtsp|rtsp://mock-camera:8554/cam1, "
+                                   "cam2=lavfi|testsrc=size=640x360:rate=30, rtsp://10.0.0.5/live",
+          streamer::SourceType::File);
+  REQUIRE(parsed.size() == 3);
+  REQUIRE(parsed[0].id == "cam1");
+  REQUIRE(parsed[0].source_type == streamer::SourceType::Rtsp);
+  REQUIRE(parsed[0].source_url == "rtsp://mock-camera:8554/cam1");
+  REQUIRE(parsed[1].id == "cam2");
+  REQUIRE(parsed[1].source_type == streamer::SourceType::Lavfi);
+  REQUIRE(parsed[2].id == "stream1");
+  REQUIRE(parsed[2].source_type == streamer::SourceType::Rtsp);
+
+  streamer::Config dup_cfg;
+  dup_cfg.streams = {
+      {"cam1", "cam1", streamer::SourceType::Rtsp, "rtsp://host/1"},
+      {"cam1", "cam1", streamer::SourceType::Rtsp, "rtsp://host/2"},
+  };
+  bool threw_dup = false;
+  try {
+    streamer::validate_config(dup_cfg);
+  } catch (const std::invalid_argument &) {
+    threw_dup = true;
+  }
+  REQUIRE(threw_dup);
+}
+
+/// 9. StageProfiler
 TEST_CASE(test_stage_profiler) {
   streamer::StageProfiler profiler;
   profiler.record(streamer::Stage::Inference, 10.0);

@@ -3,6 +3,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const playerBanner = document.getElementById('player-banner');
   const bannerText = document.getElementById('banner-text');
 
+  const streamSelect = document.getElementById('stream-select');
   const btnLive = document.getElementById('btn-mode-live');
   const btnPlayback = document.getElementById('btn-mode-playback');
   const btnLiveEdge = document.getElementById('btn-live-edge');
@@ -23,6 +24,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const searchResultsContainer = document.getElementById('search-results');
   const resultCount = document.getElementById('result-count');
 
+  let streamsList = [];
+  let activeStream = null;
+  let streamDiscoveryTimer = null;
   let currentMode = 'live';
   let hls = null;
   let hasLoadedManifest = false;
@@ -37,8 +41,100 @@ document.addEventListener('DOMContentLoaded', () => {
   let matchMode = 'any';
   let minConfidence = parseFloat(confSlider.value) || 0.35;
 
-  const LIVE_URL = '/hls/live.m3u8';
-  const PLAYBACK_URL = '/hls/playback.m3u8';
+  function getStreamUrls() {
+    const prefix = (activeStream && activeStream.hls_prefix)
+      ? activeStream.hls_prefix.replace(/\/+$/, '')
+      : '/hls';
+    return {
+      live: `${prefix}/live.m3u8`,
+      playback: `${prefix}/playback.m3u8`,
+      stats: `${prefix}/stats.json`,
+      events: `${prefix}/events.json`
+    };
+  }
+
+  function populateStreamSelector(streams, selectedId) {
+    streamSelect.innerHTML = '';
+    streams.forEach((s, idx) => {
+      const opt = document.createElement('option');
+      opt.value = s.id;
+      opt.textContent = `[${idx + 1}] ${s.name || s.id}`;
+      streamSelect.appendChild(opt);
+    });
+    if (selectedId) {
+      streamSelect.value = selectedId;
+    }
+  }
+
+  function selectStream(streamId, forceReload = false) {
+    const found = streamsList.find(s => s.id === streamId);
+    if (!found) return;
+    if (!forceReload && activeStream && activeStream.id === found.id) return;
+
+    activeStream = found;
+    streamSelect.value = found.id;
+    pendingSeekTime = null;
+    eventsData = [];
+    statDetections.innerHTML = '';
+    renderSearchResults();
+
+    const urls = getStreamUrls();
+    initPlayer(currentMode === 'live' ? urls.live : urls.playback, currentMode);
+    pollStats();
+    pollEvents();
+  }
+
+  async function discoverStreams() {
+    if (window.location.protocol === 'file:') {
+      updateStateBadge('OFFLINE');
+      showBanner('Open this dashboard over HTTP (e.g. http://localhost:8999) rather than file:// for HLS playback.');
+      return;
+    }
+
+    try {
+      const response = await fetch('/hls/streams.json', { cache: 'no-store' });
+      if (response.ok) {
+        const data = await response.json();
+        if (data && Array.isArray(data.streams) && data.streams.length > 0) {
+          streamsList = data.streams;
+          const currentId = activeStream && streamsList.some(s => s.id === activeStream.id)
+            ? activeStream.id
+            : (data.default_stream && streamsList.some(s => s.id === data.default_stream)
+              ? data.default_stream
+              : streamsList[0].id);
+          populateStreamSelector(streamsList, currentId);
+          if (!activeStream || activeStream.id !== currentId) {
+            selectStream(currentId, true);
+          }
+          return;
+        }
+      }
+    } catch (_err) {
+      // Retry below or fall back to legacy single-stream layout
+    }
+
+    // Legacy single-stream fallback when streams.json is absent
+    try {
+      const legacyResp = await fetch('/hls/live.m3u8', { cache: 'no-store' });
+      if (legacyResp.ok) {
+        streamsList = [{ id: 'default', name: 'Primary Stream', hls_prefix: '/hls' }];
+        populateStreamSelector(streamsList, 'default');
+        if (!activeStream) {
+          selectStream('default', true);
+        }
+        return;
+      }
+    } catch (_err) {
+      // Retry discovery shortly
+    }
+
+    if (!activeStream) {
+      updateStateBadge('CONNECTING');
+      showBanner('Waiting for stream server to initialize...');
+      if (streamDiscoveryTimer) clearTimeout(streamDiscoveryTimer);
+      streamDiscoveryTimer = setTimeout(discoverStreams, 1500);
+    }
+  }
 
   // Set via JS property for Chromium autoplay reliability.
   video.muted = true;
@@ -287,7 +383,8 @@ document.addEventListener('DOMContentLoaded', () => {
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
       if (reloadManifest || !hasLoadedManifest || !hls) {
-        initPlayer(currentMode === 'live' ? LIVE_URL : PLAYBACK_URL, currentMode, true);
+        const urls = getStreamUrls();
+        initPlayer(currentMode === 'live' ? urls.live : urls.playback, currentMode, true);
       } else {
         hls.startLoad();
       }
@@ -321,17 +418,24 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function switchMode(mode) {
     currentMode = mode;
+    const urls = getStreamUrls();
     if (mode === 'live') {
       pendingSeekTime = null;
       btnLive.classList.add('active');
       btnPlayback.classList.remove('active');
-      initPlayer(LIVE_URL, 'live');
+      if (activeStream) initPlayer(urls.live, 'live');
     } else {
       btnPlayback.classList.add('active');
       btnLive.classList.remove('active');
-      initPlayer(PLAYBACK_URL, 'playback');
+      if (activeStream) initPlayer(urls.playback, 'playback');
     }
   }
+
+  streamSelect.addEventListener('change', (e) => {
+    if (e.target.value) {
+      selectStream(e.target.value, true);
+    }
+  });
 
   btnLive.addEventListener('click', () => switchMode('live'));
   btnPlayback.addEventListener('click', () => switchMode('playback'));
@@ -361,8 +465,9 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   async function pollStats() {
+    if (!activeStream) return;
     try {
-      const response = await fetch('/hls/stats.json', { cache: 'no-store' });
+      const response = await fetch(getStreamUrls().stats, { cache: 'no-store' });
       if (!response.ok) return;
       const stats = await response.json();
 
@@ -402,7 +507,8 @@ document.addEventListener('DOMContentLoaded', () => {
             clearTimeout(reconnectTimer);
             reconnectTimer = null;
           }
-          initPlayer(currentMode === 'live' ? LIVE_URL : PLAYBACK_URL, currentMode, true);
+          const urls = getStreamUrls();
+          initPlayer(currentMode === 'live' ? urls.live : urls.playback, currentMode, true);
         }
       }
     } catch (_err) {
@@ -434,8 +540,9 @@ document.addEventListener('DOMContentLoaded', () => {
   setInterval(pollStats, 1000);
 
   async function pollEvents() {
+    if (!activeStream) return;
     try {
-      const response = await fetch('/hls/events.json', { cache: 'no-store' });
+      const response = await fetch(getStreamUrls().events, { cache: 'no-store' });
       if (!response.ok) return;
       const data = await response.json();
       const list = Array.isArray(data) ? data : (Array.isArray(data.events) ? data.events : null);
@@ -594,6 +701,11 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     } else if (key === 'l' || key === 'L') {
       btnLiveEdge.click();
+    } else if (key >= '1' && key <= '9') {
+      const idx = parseInt(key, 10) - 1;
+      if (idx < streamsList.length) {
+        selectStream(streamsList[idx].id, true);
+      }
     } else if ((key === 'ArrowLeft' || key === 'ArrowRight') && currentMode === 'playback') {
       event.preventDefault();
       const delta = key === 'ArrowLeft' ? -5 : 5;
@@ -607,7 +719,5 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  initPlayer(LIVE_URL, 'live');
-  pollStats();
-  pollEvents();
+  discoverStreams();
 });

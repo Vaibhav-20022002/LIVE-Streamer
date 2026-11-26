@@ -143,6 +143,61 @@ TranscodeMode parse_transcode_mode(const std::string &s) {
   throw std::invalid_argument("Unknown transcode mode: " + s);
 }
 
+std::vector<StreamConfig> parse_streams_spec(const std::string &spec, SourceType default_type) {
+  std::vector<StreamConfig> result;
+  std::stringstream         ss(spec);
+  std::string               token;
+  int                       auto_idx = 1;
+
+  while (std::getline(ss, token, ',')) {
+    const std::string item = trim(token);
+    if (item.empty()) {
+      continue;
+    }
+
+    StreamConfig sc;
+    std::string  rhs;
+    const size_t eq_pos     = item.find('=');
+    const size_t scheme_pos = item.find("://");
+    if (eq_pos != std::string::npos && (scheme_pos == std::string::npos || eq_pos < scheme_pos)) {
+      sc.id = trim(item.substr(0, eq_pos));
+      rhs   = trim(item.substr(eq_pos + 1));
+    } else {
+      sc.id = "stream" + std::to_string(auto_idx++);
+      rhs   = item;
+    }
+
+    if (sc.id.empty()) {
+      throw std::invalid_argument("Invalid empty stream id in STREAMS entry: " + item);
+    }
+    for (unsigned char c : sc.id) {
+      if (!std::isalnum(c) && c != '_' && c != '-') {
+        throw std::invalid_argument("Invalid stream id '" + sc.id + "': use [a-zA-Z0-9_-]");
+      }
+    }
+    sc.name = sc.id;
+
+    const size_t pipe_pos = rhs.find('|');
+    if (pipe_pos != std::string::npos) {
+      sc.source_type = parse_source_type(trim(rhs.substr(0, pipe_pos)));
+      sc.source_url  = trim(rhs.substr(pipe_pos + 1));
+    } else {
+      sc.source_url = rhs;
+      if (sc.source_url.rfind("rtsp://", 0) == 0) {
+        sc.source_type = SourceType::Rtsp;
+      } else {
+        sc.source_type = default_type;
+      }
+    }
+
+    if (sc.source_url.empty()) {
+      throw std::invalid_argument("Missing source URL for stream: " + sc.id);
+    }
+    result.push_back(std::move(sc));
+  }
+  return result;
+}
+
 std::unordered_map<std::string, std::string> parse_dotenv_file(const std::string &path) {
   std::unordered_map<std::string, std::string> map;
   std::ifstream                                file(path);
@@ -189,6 +244,9 @@ Config load_config_from_map(const std::unordered_map<std::string, std::string> &
   if (auto *v = get_val("SOURCE_WIDTH")) cfg.source_width = parse_int(*v);
   if (auto *v = get_val("SOURCE_HEIGHT")) cfg.source_height = parse_int(*v);
   if (auto *v = get_val("SOURCE_FPS")) cfg.source_fps = parse_int(*v);
+  if (auto *v = get_val("STREAMS")) {
+    cfg.streams = parse_streams_spec(*v, cfg.source_type);
+  }
   if (auto *v = get_val("TRANSCODE_MODE")) cfg.transcode_mode = parse_transcode_mode(*v);
   if (auto *v = get_val("ENCODER_PRESET")) cfg.encoder_preset = *v;
   if (auto *v = get_val("ENCODER_BITRATE_KBPS")) cfg.encoder_bitrate_kbps = parse_int(*v);
@@ -250,6 +308,7 @@ Config load_config(const std::string &dotenv_path) {
       "SOURCE_WIDTH",
       "SOURCE_HEIGHT",
       "SOURCE_FPS",
+      "STREAMS",
       "TRANSCODE_MODE",
       "ENCODER_PRESET",
       "ENCODER_BITRATE_KBPS",
@@ -287,8 +346,22 @@ void validate_config(const Config &cfg) {
   if (cfg.hls_output_dir.empty()) {
     throw std::invalid_argument("Invalid hls_output_dir: cannot be empty");
   }
-  if (cfg.source_url.empty()) {
+  if (cfg.source_url.empty() && cfg.streams.empty()) {
     throw std::invalid_argument("Invalid source_url: cannot be empty");
+  }
+  if (!cfg.streams.empty()) {
+    std::unordered_set<std::string> seen_ids;
+    for (const auto &sc : cfg.streams) {
+      if (sc.id.empty()) {
+        throw std::invalid_argument("Invalid stream entry: id cannot be empty");
+      }
+      if (!seen_ids.insert(sc.id).second) {
+        throw std::invalid_argument("Duplicate stream id in STREAMS: " + sc.id);
+      }
+      if (sc.source_url.empty()) {
+        throw std::invalid_argument("Invalid stream url for stream: " + sc.id);
+      }
+    }
   }
   if (cfg.source_width <= 0 || cfg.source_height <= 0) {
     throw std::invalid_argument("Invalid source dimensions: width and height must be > 0");

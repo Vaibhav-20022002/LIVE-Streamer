@@ -40,12 +40,26 @@ struct PipelineMetrics {
   int64_t timestamp_epoch_ms = 0;
 };
 
+struct StreamDescriptor {
+  std::string id;
+  std::string name;
+  std::string source_type;
+  std::string hls_prefix;
+};
+
 /// Write atomically via temp file and rename.
 bool write_atomic_file(const std::filesystem::path &path, const std::string &content);
 
 std::string serialize_stats_json(const PipelineMetrics &m);
 
 bool write_stats_json(const std::filesystem::path &hls_dir, const PipelineMetrics &m);
+
+std::string serialize_streams_json(const std::vector<StreamDescriptor> &streams,
+    const std::string                                                  &default_id);
+
+bool write_streams_json(const std::filesystem::path &hls_root,
+    const std::vector<StreamDescriptor>             &streams,
+    const std::string                               &default_id);
 
 std::string escape_json_string(const std::string &input);
 

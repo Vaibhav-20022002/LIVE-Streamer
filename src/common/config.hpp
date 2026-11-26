@@ -3,11 +3,19 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 namespace streamer {
 
 enum class SourceType { Rtsp, V4l2, AvFoundation, Lavfi, File };
 enum class TranscodeMode { Auto, Always, Remux };
+
+struct StreamConfig {
+  std::string id;
+  std::string name;
+  SourceType  source_type = SourceType::Rtsp;
+  std::string source_url;
+};
 
 struct Config {
   int         web_port       = 8999;
@@ -18,6 +26,8 @@ struct Config {
   int         source_width  = 1280;
   int         source_height = 720;
   int         source_fps    = 30;
+
+  std::vector<StreamConfig> streams;
 
   TranscodeMode transcode_mode         = TranscodeMode::Auto;
   std::string   encoder_preset         = "ultrafast";
@@ -51,6 +61,7 @@ std::string   transcode_mode_to_string(TranscodeMode m);
 TranscodeMode parse_transcode_mode(const std::string &s);
 
 std::unordered_map<std::string, std::string> parse_dotenv_file(const std::string &path);
+std::vector<StreamConfig> parse_streams_spec(const std::string &spec, SourceType default_type);
 Config load_config_from_map(const std::unordered_map<std::string, std::string> &env_map);
 Config load_config(const std::string &dotenv_path = ".env");
 void   validate_config(const Config &cfg);

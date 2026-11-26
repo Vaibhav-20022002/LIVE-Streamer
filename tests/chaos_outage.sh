@@ -214,23 +214,29 @@ elif [ "$MODE" = "docker" ]; then
     echo "Building and starting containers..."
     docker compose up -d --build --force-recreate
 
-    echo "Waiting for http://localhost:8999/hls/live.m3u8 and stats.json..."
+    echo "Waiting for http://localhost:8999/hls/streams.json (or legacy live.m3u8)..."
+    STREAM_PREFIX="/hls"
     ELAPSED=0
     while [ $ELAPSED -lt 30 ]; do
-        if curl -s -f "http://localhost:8999/hls/live.m3u8" >/dev/null 2>&1 && \
-           curl -s -f "http://localhost:8999/hls/stats.json" >/dev/null 2>&1; then
+        STREAMS_JSON=$(curl -s -f "http://localhost:8999/hls/streams.json" 2>/dev/null || echo "")
+        if [ -n "$STREAMS_JSON" ]; then
+            PARSED_PREFIX=$(echo "$STREAMS_JSON" | python3 -c "import sys, json; d=json.load(sys.stdin); s=d.get('streams',[]); print(s[0]['hls_prefix'] if s else '/hls')" 2>/dev/null || echo "/hls")
+            STREAM_PREFIX="$PARSED_PREFIX"
+        fi
+        if curl -s -f "http://localhost:8999${STREAM_PREFIX}/live.m3u8" >/dev/null 2>&1 && \
+           curl -s -f "http://localhost:8999${STREAM_PREFIX}/stats.json" >/dev/null 2>&1; then
             break
         fi
         sleep 2
         ELAPSED=$((ELAPSED + 2))
     done
 
-    if ! curl -s -f "http://localhost:8999/hls/live.m3u8" >/dev/null 2>&1; then
-        echo "ERROR: HLS stream did not become ready in Docker."
+    if ! curl -s -f "http://localhost:8999${STREAM_PREFIX}/live.m3u8" >/dev/null 2>&1; then
+        echo "ERROR: HLS stream (${STREAM_PREFIX}) did not become ready in Docker."
         docker compose logs
         exit 1
     fi
-    echo "Docker stream is up."
+    echo "Docker stream is up at ${STREAM_PREFIX}."
 
     # 4. Upstream outage in Docker: kill mock-camera, wait 6s, start mock-camera, wait up to 16s
     echo "Simulating upstream outage in Docker (kill mock-camera)..."
@@ -244,8 +250,8 @@ elif [ "$MODE" = "docker" ]; then
     RECONNECT_COUNT="0"
     ELAPSED=0
     while [ $ELAPSED -lt 16 ]; do
-        STATS_JSON=$(curl -s "http://localhost:8999/hls/stats.json" || echo "{}")
-        PLAYBACK_M3U8=$(curl -s "http://localhost:8999/hls/playback.m3u8" || echo "")
+        STATS_JSON=$(curl -s "http://localhost:8999${STREAM_PREFIX}/stats.json" || echo "{}")
+        PLAYBACK_M3U8=$(curl -s "http://localhost:8999${STREAM_PREFIX}/playback.m3u8" || echo "")
         RECONNECT_COUNT=$(echo "$STATS_JSON" | grep -o '"reconnect_count":[0-9]*' | head -n1 | cut -d':' -f2 || echo "0")
         if [ "${RECONNECT_COUNT:-0}" -ge 1 ] && \
            echo "$PLAYBACK_M3U8" | grep -q "#EXT-X-DISCONTINUITY" && \
@@ -256,7 +262,7 @@ elif [ "$MODE" = "docker" ]; then
         ELAPSED=$((ELAPSED + 2))
     done
 
-    echo "Detected Docker reconnect_count: ${RECONNECT_COUNT:-0}"
+    echo "Detected Docker reconnect_count (${STREAM_PREFIX}): ${RECONNECT_COUNT:-0}"
     if [ "${RECONNECT_COUNT:-0}" -lt 1 ]; then
         echo "ERROR: Docker stats.json reconnect_count is less than 1:"
         echo "$STATS_JSON"
@@ -286,10 +292,10 @@ elif [ "$MODE" = "docker" ]; then
     docker compose unpause nginx
     sleep 2
 
-    if curl -s -f "http://localhost:8999/hls/live.m3u8" >/dev/null 2>&1; then
-        echo "Downstream recovery verified: live.m3u8 returned HTTP 200."
+    if curl -s -f "http://localhost:8999${STREAM_PREFIX}/live.m3u8" >/dev/null 2>&1; then
+        echo "Downstream recovery verified: ${STREAM_PREFIX}/live.m3u8 returned HTTP 200."
     else
-        echo "ERROR: live.m3u8 not accessible after downstream unpause."
+        echo "ERROR: ${STREAM_PREFIX}/live.m3u8 not accessible after downstream unpause."
         exit 1
     fi
 

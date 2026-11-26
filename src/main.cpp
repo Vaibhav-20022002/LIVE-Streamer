@@ -180,38 +180,14 @@ std::string format_telemetry_line(const std::string &mode,
   return oss.str();
 }
 
-} //< namespace
+std::string scoped_component(const std::string &stream_id, const char *component) {
+  return stream_id.empty() ? std::string(component) : (stream_id + ":" + component);
+}
 
-int main(int argc, char **argv) {
-  std::signal(SIGINT, handle_signal);
-  std::signal(SIGTERM, handle_signal);
-  /// Keep AV_LOG_WARNING+ to silence Libav HLS segment INFO chatter.
-  av_log_set_level(AV_LOG_WARNING);
-
-  const std::string env_path = (argc > 1 && argv[1]) ? argv[1] : ".env";
-  streamer::Config  cfg;
-  try {
-    cfg = streamer::load_config(env_path);
-  } catch (const std::exception &ex) {
-    streamer::log_error("config", std::string("Configuration error: ") + ex.what());
-    return 1;
-  }
-
-  {
-    std::ostringstream banner;
-    banner << "Starting Live Video Streamer | source="
-           << streamer::source_type_to_string(cfg.source_type) << " url=" << cfg.source_url
-           << " transcode=" << streamer::transcode_mode_to_string(cfg.transcode_mode)
-           << " hls_dir=" << cfg.hls_output_dir << " seg=" << cfg.hls_segment_duration << "s"
-           << " retention=" << cfg.playback_retention_sec << "s"
-           << " ai=" << (cfg.ai_enabled ? "true" : "false")
-           << " sync=" << (cfg.ai_sync_mode ? "true" : "false")
-           << " pool=" << (cfg.use_buffer_pool ? "true" : "false");
-    streamer::log_info("streamer", banner.str());
-  }
-
+void run_stream_pipeline(const streamer::Config &cfg,
+    const std::string                           &stream_id,
+    int64_t                                      app_start_ms) {
   const std::filesystem::path hls_dir(cfg.hls_output_dir);
-  cleanup_stale_hls_files(hls_dir);
 
   streamer::StageProfiler   profiler;
   streamer::PlaybackManager playback_mgr(hls_dir, cfg.playback_retention_sec);
@@ -219,7 +195,6 @@ int main(int argc, char **argv) {
   ai_worker.start();
 
   streamer::ExponentialBackoff backoff(cfg.reconnect_base_ms, cfg.reconnect_max_ms);
-  const int64_t                app_start_ms = streamer::now_steady_ms();
 
   int         reconnect_epoch  = 0;
   uint64_t    reconnect_count  = 0;
@@ -277,10 +252,11 @@ int main(int argc, char **argv) {
     streamer::SourceCapture capture(cfg, g_stop_requested);
     std::string             err;
     if (!capture.open(err)) {
-      streamer::log_warn("capture", "Open failed: " + err);
+      streamer::log_warn(scoped_component(stream_id, "capture"), "Open failed: " + err);
       ++reconnect_count;
       const int delay = backoff.next_delay_ms();
-      streamer::log_info("resilience", "Retrying capture in " + std::to_string(delay) + " ms");
+      streamer::log_info(scoped_component(stream_id, "resilience"),
+          "Retrying capture in " + std::to_string(delay) + " ms");
       if (!sleep_interruptible_ms(delay, app_start_ms, cfg.max_duration_sec)) {
         break;
       }
@@ -306,7 +282,7 @@ int main(int argc, char **argv) {
         : muxer.open_transcode(
               out_w, out_h, out_fps, start_seg, reconnect_epoch, append_discont, err);
     if (!mux_ok) {
-      streamer::log_error("muxer", "Open failed: " + err);
+      streamer::log_error(scoped_component(stream_id, "muxer"), "Open failed: " + err);
       capture.close();
       ++reconnect_count;
       const int delay = backoff.next_delay_ms();
@@ -320,7 +296,7 @@ int main(int argc, char **argv) {
     if (!use_remux &&
         !init_transcode_resources(
             cfg, capture, out_w, out_h, ai_worker.is_active(), transcode, err)) {
-      streamer::log_error("decode", err);
+      streamer::log_error(scoped_component(stream_id, "decode"), err);
       muxer.close();
       capture.close();
       ++reconnect_count;
@@ -336,7 +312,7 @@ int main(int argc, char **argv) {
       ss << "Streaming active | epoch=" << reconnect_epoch << " mode=" << last_mode << " " << out_w
          << "x" << out_h << "@" << out_fps << "fps start_seg=" << start_seg
          << " init=" << muxer.init_filename();
-      streamer::log_info("pipeline", ss.str());
+      streamer::log_info(scoped_component(stream_id, "pipeline"), ss.str());
     }
 
     streamer::AVPacketPtr pkt(av_packet_alloc());
@@ -361,7 +337,8 @@ int main(int argc, char **argv) {
       }
       if (rs == streamer::ReadStatus::Eof || rs == streamer::ReadStatus::Timeout ||
           rs == streamer::ReadStatus::Error) {
-        streamer::log_warn("capture", "Stream interrupted (" + err + ")");
+        streamer::log_warn(
+            scoped_component(stream_id, "capture"), "Stream interrupted (" + err + ")");
         break;
       }
 
@@ -371,7 +348,8 @@ int main(int argc, char **argv) {
         {
           streamer::StageProfiler::ScopedTimer t_mux(profiler, streamer::Stage::Mux);
           if (!muxer.write_remux_packet(pkt.get(), capture.video_stream()->time_base, err)) {
-            streamer::log_error("muxer", "Remux packet failed: " + err);
+            streamer::log_error(
+                scoped_component(stream_id, "muxer"), "Remux packet failed: " + err);
             break;
           }
         }
@@ -476,7 +454,8 @@ int main(int argc, char **argv) {
           {
             streamer::StageProfiler::ScopedTimer t_enc(profiler, streamer::Stage::Encode);
             if (!muxer.encode_and_write_frame(transcode.yuv_frame.get(), err)) {
-              streamer::log_error("muxer", "Encode/write failed: " + err);
+              streamer::log_error(
+                  scoped_component(stream_id, "muxer"), "Encode/write failed: " + err);
               mux_failed = true;
               break;
             }
@@ -517,7 +496,7 @@ int main(int argc, char **argv) {
       }
 
       if (now_ms - last_prof_ms >= static_cast<int64_t>(cfg.profiling_log_interval_sec) * 1000LL) {
-        streamer::log_info("telemetry",
+        streamer::log_info(scoped_component(stream_id, "telemetry"),
             format_telemetry_line(last_mode,
                 last_fps_out,
                 frames_processed,
@@ -548,7 +527,7 @@ int main(int argc, char **argv) {
     publish_stats("reconnecting", last_mode, out_w, out_h, 0.0, 0.0);
 
     const int delay = backoff.next_delay_ms();
-    streamer::log_warn("resilience",
+    streamer::log_warn(scoped_component(stream_id, "resilience"),
         "Reconnecting (epoch=" + std::to_string(reconnect_epoch) + ") after " +
             std::to_string(delay) + " ms backoff");
     if (!sleep_interruptible_ms(delay, app_start_ms, cfg.max_duration_sec)) {
@@ -568,7 +547,91 @@ int main(int argc, char **argv) {
     ss << "Shutdown complete | frames=" << frames_processed << " reconnects=" << reconnect_count
        << " ai_inferences=" << ai_worker.inference_count() << "\n"
        << profiler.format_summary();
-    streamer::log_info("streamer", ss.str());
+    streamer::log_info(scoped_component(stream_id, "streamer"), ss.str());
+  }
+}
+
+} //< namespace
+
+int main(int argc, char **argv) {
+  std::signal(SIGINT, handle_signal);
+  std::signal(SIGTERM, handle_signal);
+  /// Keep AV_LOG_WARNING+ to silence Libav HLS segment INFO chatter.
+  av_log_set_level(AV_LOG_WARNING);
+
+  const std::string env_path = (argc > 1 && argv[1]) ? argv[1] : ".env";
+  streamer::Config  cfg;
+  try {
+    cfg = streamer::load_config(env_path);
+  } catch (const std::exception &ex) {
+    streamer::log_error("config", std::string("Configuration error: ") + ex.what());
+    return 1;
+  }
+
+  const int64_t               app_start_ms = streamer::now_steady_ms();
+  const std::filesystem::path hls_dir(cfg.hls_output_dir);
+  cleanup_stale_hls_files(hls_dir);
+
+  if (cfg.streams.empty()) {
+    {
+      std::ostringstream banner;
+      banner << "Starting Live Video Streamer | source="
+             << streamer::source_type_to_string(cfg.source_type) << " url=" << cfg.source_url
+             << " transcode=" << streamer::transcode_mode_to_string(cfg.transcode_mode)
+             << " hls_dir=" << cfg.hls_output_dir << " seg=" << cfg.hls_segment_duration << "s"
+             << " retention=" << cfg.playback_retention_sec << "s"
+             << " ai=" << (cfg.ai_enabled ? "true" : "false")
+             << " sync=" << (cfg.ai_sync_mode ? "true" : "false")
+             << " pool=" << (cfg.use_buffer_pool ? "true" : "false");
+      streamer::log_info("streamer", banner.str());
+    }
+
+    streamer::StreamDescriptor desc{
+        "default", "Primary Stream", streamer::source_type_to_string(cfg.source_type), "/hls"};
+    streamer::write_streams_json(hls_dir, {desc}, desc.id);
+    run_stream_pipeline(cfg, "", app_start_ms);
+    return 0;
+  }
+
+  std::vector<streamer::StreamDescriptor> descriptors;
+  std::vector<streamer::Config>           stream_cfgs;
+  descriptors.reserve(cfg.streams.size());
+  stream_cfgs.reserve(cfg.streams.size());
+
+  for (const auto &sc : cfg.streams) {
+    const std::filesystem::path sub_dir = hls_dir / sc.id;
+    cleanup_stale_hls_files(sub_dir);
+
+    streamer::Config sub_cfg = cfg;
+    sub_cfg.hls_output_dir   = sub_dir.string();
+    sub_cfg.source_type      = sc.source_type;
+    sub_cfg.source_url       = sc.source_url;
+
+    descriptors.push_back(
+        {sc.id, sc.name, streamer::source_type_to_string(sc.source_type), "/hls/" + sc.id});
+    stream_cfgs.push_back(std::move(sub_cfg));
+  }
+
+  streamer::write_streams_json(hls_dir, descriptors, descriptors.front().id);
+
+  {
+    std::ostringstream banner;
+    banner << "Starting Live Video Streamer (Multi-Stream) | streams=" << stream_cfgs.size()
+           << " transcode=" << streamer::transcode_mode_to_string(cfg.transcode_mode)
+           << " hls_dir=" << cfg.hls_output_dir << " seg=" << cfg.hls_segment_duration << "s"
+           << " retention=" << cfg.playback_retention_sec << "s"
+           << " ai=" << (cfg.ai_enabled ? "true" : "false");
+    streamer::log_info("streamer", banner.str());
+  }
+
+  std::vector<std::thread> workers;
+  workers.reserve(stream_cfgs.size());
+  for (size_t i = 0; i < stream_cfgs.size(); ++i) {
+    workers.emplace_back(
+        [&, i]() { run_stream_pipeline(stream_cfgs[i], descriptors[i].id, app_start_ms); });
+  }
+  for (auto &w : workers) {
+    w.join();
   }
   return 0;
 }

@@ -32,13 +32,21 @@ struct AiWorker::Impl {
   std::vector<float> synthetic_output;
 
 #if defined(ENABLE_AI) && ENABLE_AI == 1
-  Ort::Env                      env{ORT_LOGGING_LEVEL_WARNING, "live_streamer"};
   std::unique_ptr<Ort::Session> session;
   std::string                   input_name;
   std::string                   output_name;
   std::vector<float>            transposed_output;
 #endif
 };
+
+#if defined(ENABLE_AI) && ENABLE_AI == 1
+namespace {
+Ort::Env &shared_ort_env() {
+  static Ort::Env env{ORT_LOGGING_LEVEL_WARNING, "live_streamer"};
+  return env;
+}
+} //< namespace
+#endif
 
 AiWorker::AiWorker(const Config &cfg, StageProfiler &profiler)
     : cfg_(cfg)
@@ -70,7 +78,7 @@ AiWorker::AiWorker(const Config &cfg, StageProfiler &profiler)
       opts.SetIntraOpNumThreads(std::max(1, cfg_.ai_threads));
       opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
 
-      impl_->session = std::make_unique<Ort::Session>(impl_->env, model_path.c_str(), opts);
+      impl_->session = std::make_unique<Ort::Session>(shared_ort_env(), model_path.c_str(), opts);
 
       Ort::AllocatorWithDefaultOptions allocator;
       if (impl_->session->GetInputCount() > 0) {

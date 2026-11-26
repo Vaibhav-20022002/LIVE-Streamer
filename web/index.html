@@ -15,6 +15,12 @@
         <h1>Genea Live Streamer & AI Monitor</h1>
       </div>
       <div class="header-right">
+        <div class="stream-selector-group">
+          <label for="stream-select" class="stream-label">Stream</label>
+          <select id="stream-select" class="stream-select" aria-label="Select Stream">
+            <option value="">Connecting...</option>
+          </select>
+        </div>
         <div class="mode-switcher" role="group" aria-label="Stream Mode">
           <button id="btn-mode-live" class="mode-btn active" data-mode="live">Live</button>
           <button id="btn-mode-playback" class="mode-btn" data-mode="playback">Playback (DVR)</button>
@@ -71,6 +77,7 @@
             <span><kbd>M</kbd> Mute</span>
             <span><kbd>F</kbd> Fullscreen</span>
             <span><kbd>L</kbd> Jump to Live</span>
+            <span><kbd>1</kbd>–<kbd>9</kbd> Switch Stream</span>
             <span><kbd>←</kbd> / <kbd>→</kbd> Seek ±5s (DVR)</span>
           </div>
         </div>

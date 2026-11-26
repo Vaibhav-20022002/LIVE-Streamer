@@ -182,4 +182,33 @@ bool write_stats_json(const std::filesystem::path &hls_dir, const PipelineMetric
   return write_atomic_file(stats_path, json_str);
 }
 
+std::string serialize_streams_json(const std::vector<StreamDescriptor> &streams,
+    const std::string                                                  &default_id) {
+  std::ostringstream oss;
+  oss << "{";
+  oss << "\"default_stream\":\"" << escape_json_string(default_id) << "\",";
+  oss << "\"streams\":[";
+  for (size_t i = 0; i < streams.size(); ++i) {
+    const auto &s = streams[i];
+    if (i > 0) {
+      oss << ",";
+    }
+    oss << "{"
+        << "\"id\":\"" << escape_json_string(s.id) << "\","
+        << "\"name\":\"" << escape_json_string(s.name) << "\","
+        << "\"source_type\":\"" << escape_json_string(s.source_type) << "\","
+        << "\"hls_prefix\":\"" << escape_json_string(s.hls_prefix) << "\""
+        << "}";
+  }
+  oss << "]}";
+  return oss.str();
+}
+
+bool write_streams_json(const std::filesystem::path &hls_root,
+    const std::vector<StreamDescriptor>             &streams,
+    const std::string                               &default_id) {
+  std::filesystem::path streams_path = hls_root / "streams.json";
+  return write_atomic_file(streams_path, serialize_streams_json(streams, default_id));
+}
+
 } //< namespace streamer
