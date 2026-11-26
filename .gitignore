@@ -15,4 +15,5 @@ models/*.onnx
 perf.data*
 __pycache__/
 *.mp4
+docs/*.pdf
 .vscode/

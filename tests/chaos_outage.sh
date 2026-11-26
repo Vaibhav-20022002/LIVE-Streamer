@@ -4,6 +4,10 @@ set -euo pipefail
 # Chaos Outage & Reconnect Test Script for Live Video Streaming Solution
 # Supports --mode local and --mode docker
 
+if [ -d "/Applications/Docker.app/Contents/Resources/bin" ]; then
+    export PATH="/Applications/Docker.app/Contents/Resources/bin:$PATH"
+fi
+
 MODE="local"
 if [ $# -gt 0 ]; then
     case "$1" in
@@ -206,13 +210,9 @@ if [ "$MODE" = "local" ]; then
 
 elif [ "$MODE" = "docker" ]; then
     echo "=== Running Docker Chaos Tests ==="
-    
-    if [ ! -f ".env" ] && [ -f ".env.example" ]; then
-        cp .env.example .env
-    fi
 
     echo "Building and starting containers..."
-    docker compose up -d --build
+    docker compose up -d --build --force-recreate
 
     echo "Waiting for http://localhost:8999/hls/live.m3u8 and stats.json..."
     ELAPSED=0
@@ -232,20 +232,51 @@ elif [ "$MODE" = "docker" ]; then
     fi
     echo "Docker stream is up."
 
-    # 4. Upstream outage in Docker: kill mock-camera, wait 6s, start mock-camera, wait 8s
+    # 4. Upstream outage in Docker: kill mock-camera, wait 6s, start mock-camera, wait up to 16s
     echo "Simulating upstream outage in Docker (kill mock-camera)..."
     docker compose kill mock-camera
     sleep 6
     echo "Restarting mock-camera..."
     docker compose start mock-camera
-    sleep 8
 
-    # Verify stats.json shows reconnect_count >= 1 and playback.m3u8 contains DISCONTINUITY
-    STATS_JSON=$(curl -s "http://localhost:8999/hls/stats.json" || echo "{}")
-    echo "Stats JSON: $STATS_JSON"
-    PLAYBACK_M3U8=$(curl -s "http://localhost:8999/hls/playback.m3u8" || echo "")
-    echo "Playback M3U8 sample:"
-    echo "$PLAYBACK_M3U8" | head -n 20
+    STATS_JSON="{}"
+    PLAYBACK_M3U8=""
+    RECONNECT_COUNT="0"
+    ELAPSED=0
+    while [ $ELAPSED -lt 16 ]; do
+        STATS_JSON=$(curl -s "http://localhost:8999/hls/stats.json" || echo "{}")
+        PLAYBACK_M3U8=$(curl -s "http://localhost:8999/hls/playback.m3u8" || echo "")
+        RECONNECT_COUNT=$(echo "$STATS_JSON" | grep -o '"reconnect_count":[0-9]*' | head -n1 | cut -d':' -f2 || echo "0")
+        if [ "${RECONNECT_COUNT:-0}" -ge 1 ] && \
+           echo "$PLAYBACK_M3U8" | grep -q "#EXT-X-DISCONTINUITY" && \
+           echo "$PLAYBACK_M3U8" | grep -q "init_1.mp4"; then
+            break
+        fi
+        sleep 2
+        ELAPSED=$((ELAPSED + 2))
+    done
+
+    echo "Detected Docker reconnect_count: ${RECONNECT_COUNT:-0}"
+    if [ "${RECONNECT_COUNT:-0}" -lt 1 ]; then
+        echo "ERROR: Docker stats.json reconnect_count is less than 1:"
+        echo "$STATS_JSON"
+        docker compose logs streamer
+        exit 1
+    fi
+
+    if ! echo "$PLAYBACK_M3U8" | grep -q "#EXT-X-DISCONTINUITY"; then
+        echo "ERROR: #EXT-X-DISCONTINUITY not found in Docker playback.m3u8:"
+        echo "$PLAYBACK_M3U8"
+        exit 1
+    fi
+    echo "Found #EXT-X-DISCONTINUITY in Docker playback.m3u8."
+
+    if ! echo "$PLAYBACK_M3U8" | grep -q "init_1.mp4"; then
+        echo "ERROR: init_1.mp4 not found in Docker playback.m3u8:"
+        echo "$PLAYBACK_M3U8"
+        exit 1
+    fi
+    echo "Found init_1.mp4 in Docker playback.m3u8."
 
     # 5. Downstream outage in Docker: pause nginx, wait 4s, unpause nginx
     echo "Simulating downstream outage in Docker (pause nginx)..."

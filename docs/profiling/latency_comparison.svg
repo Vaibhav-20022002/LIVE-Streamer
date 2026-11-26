@@ -9,34 +9,34 @@
     .grid { stroke: #1e293b; stroke-width: 1; stroke-dasharray: 4; }
   </style>
   <rect width="100%" height="100%" fill="#0f172a" rx="8"/>
-  <text x="390" y="32" text-anchor="middle" class="title">Per-Frame Processing Latency: Avg (solid) vs P95 (shaded)</text>
-  <text x="390" y="52" text-anchor="middle" class="subtitle">1280x720 @ 30fps, 12s benchmark (lower is faster)</text>
+  <text x="390" y="32" text-anchor="middle" class="title">Critical-Path Frame Latency: Avg (solid) vs P95 (shaded)</text>
+  <text x="390" y="52" text-anchor="middle" class="subtitle">1280x720 @ 30fps, ONNX Runtime YOLOv8n CPU (lower is faster)</text>
   <line x1="100" y1="260.0" x2="740" y2="260.0" class="grid"/>
-  <text x="90" y="264.0" text-anchor="end" class="label">1.9ms</text>
+  <text x="90" y="264.0" text-anchor="end" class="label">18.0ms</text>
   <line x1="100" y1="200.0" x2="740" y2="200.0" class="grid"/>
-  <text x="90" y="204.0" text-anchor="end" class="label">3.7ms</text>
+  <text x="90" y="204.0" text-anchor="end" class="label">35.9ms</text>
   <line x1="100" y1="140.0" x2="740" y2="140.0" class="grid"/>
-  <text x="90" y="144.0" text-anchor="end" class="label">5.6ms</text>
+  <text x="90" y="144.0" text-anchor="end" class="label">53.9ms</text>
   <line x1="100" y1="80.0" x2="740" y2="80.0" class="grid"/>
-  <text x="90" y="84.0" text-anchor="end" class="label">7.4ms</text>
+  <text x="90" y="84.0" text-anchor="end" class="label">71.9ms</text>
   <line x1="100" y1="320" x2="740" y2="320" class="axis"/>
   <line x1="100" y1="80" x2="100" y2="320" class="axis"/>
-  <rect x="150" y="190.2" width="48" height="129.8" fill="#ef4444" rx="4"/>
-  <text x="174" y="184.2" text-anchor="middle" class="val">4.01ms</text>
-  <rect x="206" y="128.0" width="48" height="192.0" fill="#ef4444" fill-opacity="0.55" rx="4"/>
-  <text x="230" y="122.0" text-anchor="middle" class="val">5.93ms</text>
+  <rect x="150" y="134.5" width="48" height="185.5" fill="#ef4444" rx="4"/>
+  <text x="174" y="128.5" text-anchor="middle" class="val">55.57ms</text>
+  <rect x="206" y="120.0" width="48" height="200.0" fill="#ef4444" fill-opacity="0.55" rx="4"/>
+  <text x="230" y="114.0" text-anchor="middle" class="val">59.90ms</text>
   <text x="202" y="344" text-anchor="middle" class="label">Baseline</text>
-  <text x="202" y="362" text-anchor="middle" class="sub">(30.5 fps | 40.6 MB)</text>
-  <rect x="340" y="218.0" width="48" height="102.0" fill="#38bdf8" rx="4"/>
-  <text x="364" y="212.0" text-anchor="middle" class="val">3.15ms</text>
-  <rect x="396" y="157.3" width="48" height="162.7" fill="#38bdf8" fill-opacity="0.55" rx="4"/>
-  <text x="420" y="151.3" text-anchor="middle" class="val">5.03ms</text>
+  <text x="202" y="362" text-anchor="middle" class="sub">(17.9 fps | 144.3 MB)</text>
+  <rect x="340" y="313.2" width="48" height="6.8" fill="#38bdf8" rx="4"/>
+  <text x="364" y="307.2" text-anchor="middle" class="val">2.04ms</text>
+  <rect x="396" y="312.5" width="48" height="7.5" fill="#38bdf8" fill-opacity="0.55" rx="4"/>
+  <text x="420" y="306.5" text-anchor="middle" class="val">2.25ms</text>
   <text x="392" y="344" text-anchor="middle" class="label">Optimized</text>
-  <text x="392" y="362" text-anchor="middle" class="sub">(30.2 fps | 46.4 MB)</text>
-  <rect x="530" y="316.8" width="48" height="3.2" fill="#10b981" rx="4"/>
-  <text x="554" y="310.8" text-anchor="middle" class="val">0.10ms</text>
+  <text x="392" y="362" text-anchor="middle" class="sub">(30.4 fps | 149.6 MB)</text>
+  <rect x="530" y="318.0" width="48" height="2.0" fill="#10b981" rx="4"/>
+  <text x="554" y="312.0" text-anchor="middle" class="val">0.15ms</text>
   <rect x="586" y="318.0" width="48" height="2.0" fill="#10b981" fill-opacity="0.55" rx="4"/>
-  <text x="610" y="312.0" text-anchor="middle" class="val">0.02ms</text>
+  <text x="610" y="312.0" text-anchor="middle" class="val">0.07ms</text>
   <text x="582" y="344" text-anchor="middle" class="label">Smart Remux</text>
-  <text x="582" y="362" text-anchor="middle" class="sub">(30.2 fps | 23.7 MB)</text>
+  <text x="582" y="362" text-anchor="middle" class="sub">(30.4 fps | 62.7 MB)</text>
 </svg>

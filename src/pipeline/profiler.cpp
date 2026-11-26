@@ -4,6 +4,7 @@
 #include <cmath>
 #include <iomanip>
 #include <sstream>
+#include <sys/resource.h>
 
 namespace streamer {
 
@@ -117,6 +118,18 @@ void StageProfiler::reset() {
     ring.total_count = 0;
     ring.sum_ms      = 0.0;
   }
+}
+
+double peak_rss_mb() {
+  struct rusage ru{};
+  if (getrusage(RUSAGE_SELF, &ru) != 0) {
+    return 0.0;
+  }
+#if defined(__APPLE__)
+  return static_cast<double>(ru.ru_maxrss) / (1024.0 * 1024.0);
+#else
+  return static_cast<double>(ru.ru_maxrss) / 1024.0;
+#endif
 }
 
 } //< namespace streamer

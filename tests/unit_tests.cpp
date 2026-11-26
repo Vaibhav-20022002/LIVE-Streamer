@@ -83,6 +83,12 @@ TEST_CASE(test_config_parsing_and_validation) {
   /// Validate valid config doesn't throw
   streamer::validate_config(cfg);
 
+  /// Wildcard AI_TARGET_CLASSES=* clears target filter to allow all COCO classes
+  auto wildcard_map                 = env_map;
+  wildcard_map["AI_TARGET_CLASSES"] = "*";
+  streamer::Config wildcard_cfg     = streamer::load_config_from_map(wildcard_map);
+  REQUIRE(wildcard_cfg.ai_target_classes.empty());
+
   /// Test invalid port
   streamer::Config bad_cfg1 = cfg;
   bad_cfg1.web_port         = 70000;
@@ -268,8 +274,8 @@ TEST_CASE(test_yolov8_pipeline) {
   set_anchor(2, 200.0f, 200.0f, 60.0f, 30.0f, 2, 0.95f);
   /// 4. low confidence
   set_anchor(3, 50.0f, 50.0f, 20.0f, 20.0f, 0, 0.2f);
-  /// 5. non-target class (dog = class 16)
-  set_anchor(4, 50.0f, 50.0f, 20.0f, 20.0f, 16, 0.9f);
+  /// 5. non-target class (dog = class 16) inside active image area (y >= pad_y=70)
+  set_anchor(4, 240.0f, 150.0f, 20.0f, 20.0f, 16, 0.9f);
 
   std::unordered_set<std::string>  targets = {"person", "car"};
   std::vector<streamer::Detection> dets    = streamer::decode_yolov8_output(
@@ -288,6 +294,14 @@ TEST_CASE(test_yolov8_pipeline) {
   }
   REQUIRE(found_person);
   REQUIRE(found_car);
+
+  /// Empty set or {"*"} allows all classes including dog (class 16)
+  std::vector<streamer::Detection> all_dets_empty = streamer::decode_yolov8_output(
+      tensor.data(), num_classes, num_anchors, lb, src_w, src_h, 0.45f, 0.5f, {});
+  REQUIRE(all_dets_empty.size() == 3);
+  std::vector<streamer::Detection> all_dets_star = streamer::decode_yolov8_output(
+      tensor.data(), num_classes, num_anchors, lb, src_w, src_h, 0.45f, 0.5f, {"*"});
+  REQUIRE(all_dets_star.size() == 3);
 }
 
 /// 6. YUV420P overlay clipping

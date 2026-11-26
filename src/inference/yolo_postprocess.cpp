@@ -277,7 +277,8 @@ std::vector<Detection> decode_yolov8_output(const float *output,
     const char *label_ptr = coco_class_name(best_cid);
     std::string label(label_ptr);
 
-    if (!target_classes.empty() && target_classes.find(label) == target_classes.end()) {
+    if (!target_classes.empty() && target_classes.find("*") == target_classes.end() &&
+        target_classes.find(label) == target_classes.end()) {
       continue;
     }
 

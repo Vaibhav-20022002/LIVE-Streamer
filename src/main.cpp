@@ -260,6 +260,7 @@ int main(int argc, char **argv) {
     m.mux_stats             = profiler.snapshot(streamer::Stage::Mux);
     m.total_stats           = profiler.snapshot(streamer::Stage::TotalFrame);
     m.uptime_sec         = static_cast<double>(streamer::now_steady_ms() - app_start_ms) / 1000.0;
+    m.peak_rss_mb        = streamer::peak_rss_mb();
     m.timestamp_epoch_ms = streamer::now_epoch_ms();
     streamer::write_stats_json(hls_dir, m);
   };

@@ -212,7 +212,7 @@ Config load_config_from_map(const std::unordered_map<std::string, std::string> &
       }
     }
     if (classes.count("*")) {
-      cfg.ai_target_classes = {"*"};
+      cfg.ai_target_classes.clear();
     } else {
       cfg.ai_target_classes = std::move(classes);
     }

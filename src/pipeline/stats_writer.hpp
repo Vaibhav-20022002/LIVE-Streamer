@@ -36,6 +36,7 @@ struct PipelineMetrics {
   StageStats total_stats;
 
   double  uptime_sec         = 0.0;
+  double  peak_rss_mb        = 0.0;
   int64_t timestamp_epoch_ms = 0;
 };
 

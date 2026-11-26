@@ -168,6 +168,7 @@ std::string serialize_stats_json(const PipelineMetrics &m) {
   oss << "},";
 
   oss << "\"uptime_sec\":" << safe_double(m.uptime_sec) << ",";
+  oss << "\"peak_rss_mb\":" << safe_double(m.peak_rss_mb) << ",";
   oss << "\"timestamp_epoch_ms\":" << m.timestamp_epoch_ms;
 
   oss << "}";

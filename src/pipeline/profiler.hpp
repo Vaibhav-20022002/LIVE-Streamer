@@ -79,5 +79,6 @@ private:
 };
 
 const char *stage_name(Stage s);
+double      peak_rss_mb();
 
 } //< namespace streamer

@@ -138,7 +138,7 @@ docker run --rm -v "$(pwd)/hls_out:/data/hls" \
 
 ## 4. Web Player
 
-Served from [web/](file:///Users/desperado/Vaibhav/CustomStreamer/Live%20Video%20Streaming%20Soln/web) via Nginx on port `8999`:
+Served from [web/](web/) via Nginx on port `8999`:
 - **Live / Playback (DVR) Toggle**: Switches between `live.m3u8` and `playback.m3u8` without snapping DVR seeks back to the live edge.
 - **Object Search**: Filters detection entries from `events.json` by class tags (`AND`/`OR`) and minimum confidence; clicking a result seeks directly into `playback.m3u8`.
 - **Telemetry Bar**: Displays stream state, mode, live latency / DVR position, ingest & output FPS, AI inference timing, active labels, and reconnect/DVR counters from `stats.json`.
@@ -220,14 +220,14 @@ Variables loaded from `.env` (or process environment, which overrides `.env`):
 
 ## 7. Tests
 
-- **Unit & Module Tests ([tests/unit_tests.cpp](file:///Users/desperado/Vaibhav/CustomStreamer/Live%20Video%20Streaming%20Soln/tests/unit_tests.cpp))**:
+- **Unit & Module Tests ([tests/unit_tests.cpp](tests/unit_tests.cpp))**:
   Covers `.env` parsing/validation, `DropOldestRingBuffer`, `ByteBufferPool`, `ExponentialBackoff`, YOLOv8 letterbox/decode/NMS, YUV420P overlay clipping, `PlaybackManager` (DVR stitching, discontinuities, segment pruning, atomic JSON), and `StageProfiler` percentiles. Runs during every `docker build` and via `meson test -C build --print-errorlogs`.
 - **AddressSanitizer**:
   ```bash
   meson setup build_asan --buildtype=debugoptimized -Db_sanitize=address
   meson compile -C build_asan && meson test -C build_asan --print-errorlogs
   ```
-- **Chaos Outage Recovery ([tests/chaos_outage.sh](file:///Users/desperado/Vaibhav/CustomStreamer/Live%20Video%20Streaming%20Soln/tests/chaos_outage.sh))**:
+- **Chaos Outage Recovery ([tests/chaos_outage.sh](tests/chaos_outage.sh))**:
   Drops the upstream feed mid-stream and checks exponential backoff reconnects and `#EXT-X-DISCONTINUITY` emission in `playback.m3u8`:
   ```bash
   ./tests/chaos_outage.sh --mode local
@@ -238,13 +238,13 @@ Variables loaded from `.env` (or process environment, which overrides `.env`):
 
 ## 8. Benchmarks
 
-Measured at **1280×720 @ 30fps** (raw results in [docs/profiling/latest_results.json](docs/profiling/latest_results.json)):
+Measured inside Ubuntu 24.04 ARM64 Docker with ONNX Runtime 1.20.1 (`yolov8n.onnx`, `640x640` input) at **1280×720 @ 30fps** (raw results in [docs/profiling/latest_results.json](docs/profiling/latest_results.json)):
 
-| Mode | Frames | AI Inferences | FPS | Decode avg/p95 (ms) | Inference avg/p95 (ms) | Encode avg/p95 (ms) | Total Frame avg/p95 (ms) | Peak RSS (MB) |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Baseline** | 365 | 365 | 30.54 | 0.001 / 0.005 | 0.310 / 0.529 | 1.218 / 1.991 | **4.009 / 5.932** | 40.64 |
-| **Optimized** | 365 | 365 | 30.16 | 0.002 / 0.006 | 0.238 / 0.352 | 2.518 / 3.898 | **3.150 / 5.026** | 46.39 |
-| **Smart Remux** | 365 | 0 | 30.24 | 0.000 / 0.000 | 0.000 / 0.000 | 0.099 / 0.023 | **0.099 / 0.023** | **23.72** |
+| Mode | AI Backend | Frames | AI Inferences | FPS | Decode avg/p95 (ms) | Inference avg/p95 (ms) | Encode avg/p95 (ms) | Total Frame avg/p95 (ms) | Peak RSS (MB) |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Baseline** | `onnxruntime` | 215 | 215 | 17.86 | 0.001 / 0.001 | 52.684 / 56.669 | 1.345 / 1.675 | **55.567 / 59.897** | 144.28 |
+| **Optimized** | `onnxruntime` | 365 | 213 | 30.35 | 0.001 / 0.003 | 55.571 / 57.494 | 1.359 / 1.525 | **2.036 / 2.251** | 149.56 |
+| **Smart Remux** | `disabled` | 365 | 0 | 30.35 | 0.000 / 0.000 | 0.000 / 0.000 | 0.149 / 0.070 | **0.149 / 0.071** | **62.73** |
 
 Further details:
 - [Benchmark Report](docs/profiling/benchmark_report.md)

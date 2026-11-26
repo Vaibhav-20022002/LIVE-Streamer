@@ -263,6 +263,7 @@ AiWorker::generate_synthetic_detections(int width, int height, uint64_t seq) con
     const char *name = coco_class_name(class_id);
     std::string label(name);
     if (!cfg_.ai_target_classes.empty() &&
+        cfg_.ai_target_classes.find("*") == cfg_.ai_target_classes.end() &&
         cfg_.ai_target_classes.find(label) == cfg_.ai_target_classes.end()) {
       return;
     }
