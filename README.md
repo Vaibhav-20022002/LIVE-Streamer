@@ -1,6 +1,6 @@
 # Live Video Streamer
 
-C++20 live video ingest, HLS-fMP4 segmenter, and local ONNX Runtime object detection pipeline built directly on FFmpeg Libav (`libavformat`, `libavcodec`, `libavdevice`, `libswscale`). Supports pass-through H.264/HEVC remuxing, conditional `libx264` transcoding with direct YUV420P bounding-box overlays, rolling DVR playback, and client-side object search.
+C++20 live video ingest, HLS-fMP4 segmenter, and local ONNX Runtime object detection pipeline built directly on FFmpeg Libav (`libavformat`, `libavcodec`, `libavdevice`, `libswscale`). Supports concurrent multi-stream ingest (`STREAMS`), pass-through H.264/HEVC remuxing, conditional `libx264` transcoding with direct YUV420P bounding-box overlays, rolling DVR playback, and client-side object search.
 
 ---
 
@@ -18,7 +18,7 @@ C++20 live video ingest, HLS-fMP4 segmenter, and local ONNX Runtime object detec
 
 ## 1. Features
 
-- **Direct Libav Pipeline**: Opens RTSP, V4L2, AVFoundation, `lavfi`, or file inputs in C++ using `avformat_open_input` / `avcodec_send_packet` / `avcodec_receive_frame` / `av_interleaved_write_frame`.
+- **Direct Libav & Multi-Stream Pipeline**: Opens one or many RTSP, V4L2, AVFoundation, `lavfi`, or file inputs concurrently (one isolated pipeline thread per stream via `STREAMS`) using `avformat_open_input` / `avcodec_send_packet` / `avcodec_receive_frame` / `av_interleaved_write_frame`. Each stream writes to `<HLS_OUTPUT_DIR>/<id>/`, with a root `streams.json` manifest for player discovery.
 - **Smart Remux vs. Transcode**:
   - `TRANSCODE_MODE=auto` remuxes H.264/HEVC streams without decoding when AI is disabled.
   - Falls back to `libx264` (`preset=ultrafast`) when transcoding is required or when AI overlays are drawn onto decoded frames.
@@ -40,12 +40,12 @@ C++20 live video ingest, HLS-fMP4 segmenter, and local ONNX Runtime object detec
 ```text
 +---------------------------------------------------------------------------------+
 |                                  INPUT SOURCES                                  |
-|  [ RTSP Camera ]  [ V4L2 Webcam ]  [ AVFoundation ]  [ Lavfi ]  [ MP4 File ]    |
+|  [ RTSP cam1..N ]  [ V4L2 Webcam ]  [ AVFoundation ]  [ Lavfi ]  [ MP4 Files ]  |
 +----------------------------------------+----------------------------------------+
-                                         |
+                                         | (one isolated thread per stream)
                                          v
 +---------------------------------------------------------------------------------+
-|                               C++20 CORE ENGINE                                 |
+|                         C++20 CORE ENGINE (live_streamer)                       |
 |                                                                                 |
 |  +-----------------------+     +-----------------+     +---------------------+  |
 |  | SourceCapture         | --> | Libav Demuxer   | --> | Remux / Transcode?  |  |
@@ -54,12 +54,12 @@ C++20 live video ingest, HLS-fMP4 segmenter, and local ONNX Runtime object detec
 |  +-----------------------+                        Transcode |           | Remux |
 |                                                   / AI      |           |       |
 |  +----------------------------------------------------+     v           |       |
-|  |                 AI WORKER THREAD                   |  +-----------+  |       |
+|  |       AI WORKER THREAD (shared Ort::Env)           |  +-----------+  |       |
 |  |                                                    |  | Libav     |  |       |
 |  |  DropOldestRingBuffer (cap=2) <== RGB24 frame copy |<-+ Decoder + |  |       |
 |  |         |                        (ByteBufferPool)  |  | sws_scale |  |       |
 |  |         v                                          |  +-----+-----+  |       |
-|  |  ONNX Runtime YOLOv8n + Per-Class NMS              |        |YUV420P |       |
+|  |  ONNX Runtime Ort::Session (YOLOv8) + NMS          |        |YUV420P |       |
 |  |         |                                          |        v        |       |
 |  |         +---> latest_detections                    |  +-----------+  |       |
 |  |                     |                              |  | YUV420P   |  |       |
@@ -82,9 +82,10 @@ C++20 live video ingest, HLS-fMP4 segmenter, and local ONNX Runtime object detec
                                                                      v
 +---------------------------------------------------------------------------------+
 |                      SHARED VOLUME (/data/hls -> hls_data)                      |
-|         live.m3u8 | playback.m3u8 | init_*.mp4 | seg_*.m4s | *.json             |
+|  streams.json                                                                   |
+|  <id>/ : live.m3u8 | playback.m3u8 | init_*.mp4 | seg_*.m4s | *.json            |
 +----------------------------------------+----------------------------------------+
-                                         |  HTTP / HLS-fMP4 (read-only alias)
+                                         |  HTTP / HLS-fMP4 (Nginx root /data)
                                          v
 +---------------------------------------------------------------------------------+
 |                           NGINX HTTP SERVER (:8999)                             |
@@ -93,6 +94,7 @@ C++20 live video ingest, HLS-fMP4 segmenter, and local ONNX Runtime object detec
                                          v
 +---------------------------------------------------------------------------------+
 |                               BROWSER WEB CLIENT                                |
+|  * Stream Selector (reads /hls/streams.json, 1-9 hotkeys, legacy fallback)      |
 |  * HLS.js / Native HLS Player (Live live.m3u8 & DVR playback.m3u8)              |
 |  * Status Telemetry Bar (polls stats.json)                                      |
 |  * Object Search & Click-to-Seek DVR (polls events.json)                        |
@@ -114,12 +116,12 @@ docker compose up --build
 Then open `http://localhost:8999`.
 
 Defaults from a fresh clone:
-- `docker-compose.yml` loads `.env.example` and applies `.env` overrides if present.
+- `docker-compose.yml` loads `.env.example` and applies `.env` overrides if present (`STREAMS` defaults to `cam1` + `cam2`).
 - `Dockerfile` bundles COCO-80 `yolov8n.onnx` at `/opt/models/yolov8n.onnx` (and `AiWorker` falls back to it if `AI_MODEL_PATH` is missing).
-- `mock-camera` (`bluenviron/mediamtx`) streams the first `.mp4` found in `media/` (using `-c:v copy` for H.264, or `libx264` otherwise), or falls back to a generated `testsrc2` RTSP stream when `media/` is empty.
+- `mock-camera` (`bluenviron/mediamtx`) serves two RTSP paths: `cam1` picks the 1st `.mp4` in `media/` (else synthetic `testsrc2`) and `cam2` picks the 2nd `.mp4` in `media/` (else synthetic `testsrc`), using `-c:v copy` for H.264 or `libx264` otherwise.
 
-To test with your own video or model:
-- Copy an `.mp4` file into `media/`.
+To test with your own videos or model:
+- Copy one or more `.mp4` files into `media/` (1st feeds `cam1`, 2nd feeds `cam2`), or point `STREAMS` in `.env` at your RTSP/file sources (`id=type|url,...`).
 - Copy an `.onnx` model into `models/` and set `AI_MODEL_PATH=/app/models/<model>.onnx` in `.env`.
 
 ### Standalone Container
@@ -139,10 +141,11 @@ docker run --rm -v "$(pwd)/hls_out:/data/hls" \
 ## 4. Web Player
 
 Served from [web/](web/) via Nginx on port `8999`:
+- **Stream Selector**: Discovers active feeds from `/hls/streams.json` (with fallback to single-stream `/hls/live.m3u8`), switches playlists/stats/events cleanly via header dropdown or number keys `1`–`9`, and resets DVR/search state per stream.
 - **Live / Playback (DVR) Toggle**: Switches between `live.m3u8` and `playback.m3u8` without snapping DVR seeks back to the live edge.
 - **Object Search**: Filters detection entries from `events.json` by class tags (`AND`/`OR`) and minimum confidence; clicking a result seeks directly into `playback.m3u8`.
 - **Telemetry Bar**: Displays stream state, mode, live latency / DVR position, ingest & output FPS, AI inference timing, active labels, and reconnect/DVR counters from `stats.json`.
-- **Keyboard Shortcuts**: `Space` / `K` (play/pause), `M` (mute), `F` (fullscreen), `L` (jump to live edge), `←` / `→` (seek ±5s in DVR mode).
+- **Keyboard Shortcuts**: `1`–`9` (switch stream), `Space` / `K` (play/pause), `M` (mute), `F` (fullscreen), `L` (jump to live edge), `←` / `→` (seek ±5s in DVR mode).
 
 ---
 
@@ -189,9 +192,10 @@ Variables loaded from `.env` (or process environment, which overrides `.env`):
 | Variable | Default | Description |
 | :--- | :--- | :--- |
 | `WEB_PORT` | `8999` | Host port mapped to Nginx. |
-| `HLS_OUTPUT_DIR` | `/data/hls` | Output directory for `.m3u8`, `.mp4`, `.m4s`, and `.json` files. |
-| `SOURCE_TYPE` | `rtsp` | Capture backend (`rtsp`, `v4l2`, `avfoundation`, `lavfi`, `file`). |
-| `SOURCE_URL` | `rtsp://mock-camera:8554/live` | RTSP URI, device index/path, file path, or `lavfi` graph. |
+| `HLS_OUTPUT_DIR` | `/data/hls` | Output directory for `streams.json` and `.m3u8`/`.mp4`/`.m4s`/`.json` files (`<HLS_OUTPUT_DIR>/<id>/` when `STREAMS` is set). |
+| `STREAMS` | *(empty in binary; `cam1`+`cam2` in `.env.example`)* | Comma-separated multi-stream list (`id=type\|url`, `id=url`, or bare URL). When empty, runs a single pipeline using `SOURCE_TYPE`/`SOURCE_URL`. |
+| `SOURCE_TYPE` | `rtsp` | Capture backend (`rtsp`, `v4l2`, `avfoundation`, `lavfi`, `file`) for single-stream mode or default per-stream type. |
+| `SOURCE_URL` | `rtsp://mock-camera:8554/cam1` | Single-stream RTSP URI, device index/path, file path, or `lavfi` graph. |
 | `SOURCE_WIDTH` | `1280` | Capture/output width in pixels (fallback if container has no metadata). |
 | `SOURCE_HEIGHT` | `720` | Capture/output height in pixels. |
 | `SOURCE_FPS` | `30` | Target framerate for device/synthetic capture. |

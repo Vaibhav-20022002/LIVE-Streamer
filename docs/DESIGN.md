@@ -4,8 +4,8 @@
 
 This document describes the architecture of `live_streamer`, a C++20 Libav (`libavformat` / `libavcodec` / `libavdevice` / `libswscale`) streaming and local AI inference engine packaged in a static-HTTP HLS-fMP4 layout.
 
-- **Direct Libav Pipeline**: The core binary handles stream ingest, demuxing, decoding, encoding, and HLS-fMP4 muxing directly through Libav C APIs without an intermediary media server. (`docker-compose.yml` uses MediaMTX only as an optional test camera simulator pushing RTSP.)
-- **HLS-fMP4 Output**: Writes `init_<epoch>.mp4` + `.m4s` fragments (`HLS_SEGMENT_DURATION=2s` by default), paired with rolling `live.m3u8` and DVR `playback.m3u8` playlists.
+- **Direct Libav & Multi-Stream Pipeline**: The core binary handles stream ingest, demuxing, decoding, encoding, and HLS-fMP4 muxing directly through Libav C APIs without an intermediary media server. When `STREAMS` is configured, `main()` spawns one isolated pipeline thread per stream while sharing a single ONNX Runtime `Ort::Env`. (`docker-compose.yml` uses MediaMTX only as an optional test camera simulator pushing RTSP.)
+- **HLS-fMP4 Output**: Writes `init_<epoch>.mp4` + `.m4s` fragments (`HLS_SEGMENT_DURATION=2s` by default), paired with rolling `live.m3u8` and DVR `playback.m3u8` playlists (`<HLS_OUTPUT_DIR>/` for single stream, or `<HLS_OUTPUT_DIR>/<id>/` plus `<HLS_OUTPUT_DIR>/streams.json` in multi-stream mode).
 - **Direct YUV420P AI Overlay**: Runs YOLOv8 ONNX Runtime inference on a background thread and draws boxes/labels directly onto decoded YUV420P frames without a second RGB conversion.
 - **Two-Sided Outage Handling**: Combines `AVIOInterruptCB` deadlines and jittered exponential backoff in C++ with retry/stall watchdogs in `web/player.js`.
 
@@ -56,9 +56,11 @@ This document describes the architecture of `live_streamer`, a C++20 Libav (`lib
 
 ### 2.2 Unified Live + DVR Storage
 
-`live.m3u8` and `playback.m3u8` reference the exact same `.m4s` segment files in `HLS_OUTPUT_DIR`:
+`live.m3u8` and `playback.m3u8` reference the exact same `.m4s` segment files per stream directory (`HLS_OUTPUT_DIR` in single-stream mode, `HLS_OUTPUT_DIR/<id>` in multi-stream mode):
+- `write_streams_json()` atomically publishes `<HLS_OUTPUT_DIR>/streams.json` listing active streams and their HTTP prefixes (`/hls` or `/hls/<id>`).
 - `HlsMuxer` writes `live.m3u8` with `hls_list_size` (`HLS_LIVE_LIST_SIZE`, default 5) and `hls_flags=independent_segments+discont_start+temp_file` (`+append_list` on reconnects).
 - `PlaybackManager` periodically parses `live.m3u8`, tracks active live filenames, appends newly completed segments, writes `playback.m3u8` and `events.json` atomically via temp-file + rename, and deletes expired `.m4s` / unused `init_*.mp4` files older than `PLAYBACK_RETENTION_SEC` while protecting any segment still present in `live.m3u8`.
+- Nginx maps `location /hls/` with `root /data;` so both `/hls/streams.json` and nested `/hls/<id>/*` paths resolve cleanly without `alias` path-translation issues.
 
 ---
 
@@ -88,7 +90,7 @@ This document describes the architecture of `live_streamer`, a C++20 Libav (`lib
 
 - **Drop-Oldest Queue (`DropOldestRingBuffer`, capacity 2)**: If ONNX inference runs slower than frame capture, the oldest queued frame is evicted so video capture and HLS segment output never stall.
 - **`ByteBufferPool`**: Recycles fixed-size RGB buffers via `std::shared_ptr` custom deleters to avoid repeated heap allocations.
-- **ONNX Runtime C++ Execution**: Runs on CPU (`Ort::Session` with `ORT_ENABLE_ALL`), dynamically inspects tensor dimensions (e.g., `640x640` or `320x320`), handles both `[1, 84, N]` and `[1, N, 84]` output layouts, and applies confidence filtering + per-class NMS.
+- **ONNX Runtime C++ Execution**: One process-wide `Ort::Env` singleton (`shared_ort_env()`) is shared across concurrent `AiWorker` instances, while each stream owns an independent `Ort::Session` (`ORT_ENABLE_ALL`) so multi-stream inference threads run safely in parallel. Each session dynamically inspects tensor dimensions (e.g., `640x640` or `320x320`), handles both `[1, 84, N]` and `[1, N, 84]` output layouts, and applies confidence filtering + per-class NMS.
 
 ### 3.2 Direct YUV420P Overlay
 
@@ -98,7 +100,7 @@ Instead of converting frames to RGB for drawing and back to YUV420P for encoding
 
 - `PlaybackManager::record_detections` logs throttled (~1 Hz) detection records mapped to rolling `media_time_sec` and active `.m4s` segment names in `events.json`.
 - Nginx serves `events.json`, `stats.json`, `live.m3u8`, and `playback.m3u8` as static files.
-- `web/player.js` polls `events.json` and `stats.json`, filters events client-side (`Any`/`All` tags + confidence threshold), and seeks `playback.m3u8` to the matching `media_time_sec` offset when clicked.
+- `web/player.js` fetches `/hls/streams.json` on startup (falling back to `/hls/live.m3u8` in single-stream deployments), populates the stream selector dropdown (`1`–`9` keyboard shortcuts), polls per-stream `events.json` and `stats.json`, resets playback/search state on stream switches, filters events client-side (`Any`/`All` tags + confidence threshold), and seeks `playback.m3u8` to the matching `media_time_sec` offset when clicked.
 
 ---
 
@@ -115,7 +117,7 @@ Instead of converting frames to RGB for drawing and back to YUV420P for encoding
 
 ## 5. Multi-Camera Scaling Pattern
 
-To scale beyond a single instance:
+Within a single container, `STREAMS` runs `1..N` pipelines concurrently on dedicated `std::thread`s sharing one `Ort::Env`. To scale horizontally across machines:
 
 ```text
 +----------------------------+     Upload .m4s/.m3u8     +-------------------------+     HTTP/2
@@ -133,7 +135,7 @@ To scale beyond a single instance:
                                                                                          [ Viewers 1..K ]
 ```
 
-1. **Ingest**: Partition camera URLs across stateless workers or Kubernetes pods (`1..N` cameras per worker).
+1. **Ingest**: Partition camera URLs (`STREAMS`) across workers or Kubernetes pods (`1..N` cameras per worker).
 2. **Origin & CDN**: Serve immutable `.m4s` fragments with long-lived `Cache-Control` headers while keeping `.m3u8` playlists short-TTL (`no-cache`).
 3. **Search Metadata**: Ship per-camera `events.json` batches to an external time-series store for cross-camera queries.
 
