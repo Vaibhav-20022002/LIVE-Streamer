@@ -76,6 +76,10 @@ AiWorker::AiWorker(const Config &cfg, StageProfiler &profiler)
     try {
       Ort::SessionOptions opts;
       opts.SetIntraOpNumThreads(std::max(1, cfg_.ai_threads));
+      opts.SetInterOpNumThreads(1);
+      /// Prevent ORT worker threads from busy-spinning between inference calls.
+      opts.AddConfigEntry("session.intra_op.allow_spinning", "0");
+      opts.AddConfigEntry("session.inter_op.allow_spinning", "0");
       opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
 
       impl_->session = std::make_unique<Ort::Session>(shared_ort_env(), model_path.c_str(), opts);
@@ -86,7 +90,8 @@ AiWorker::AiWorker(const Config &cfg, StageProfiler &profiler)
         if (in_name) {
           impl_->input_name = in_name.get();
         }
-        /// Keep Ort::TypeInfo alive; GetTensorTypeAndShapeInfo() returns a view.
+        /// Keep Ort::TypeInfo alive; GetTensorTypeAndShapeInfo() returns a
+        /// view.
         auto in_type_info = impl_->session->GetInputTypeInfo(0);
         auto in_info      = in_type_info.GetTensorTypeAndShapeInfo();
         auto shape        = in_info.GetShape();
@@ -240,7 +245,9 @@ std::vector<Detection> AiWorker::latest_detections() const {
 void AiWorker::worker_loop() {
   InferenceJob job;
   while (running_.load() && queue_.pop_wait(job)) {
+    busy_.store(true, std::memory_order_relaxed);
     std::vector<Detection> detections = run_inference_on_job(job);
+    busy_.store(false, std::memory_order_relaxed);
     {
       std::lock_guard<std::mutex> lock(det_mu_);
       latest_detections_ = std::move(detections);

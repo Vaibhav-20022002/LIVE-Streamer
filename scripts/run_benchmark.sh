@@ -135,6 +135,7 @@ run_scenario "Baseline" \
     AI_MODEL_PATH="$MODEL_PATH" \
     AI_CONF_THRESHOLD=0.35 \
     SYNTHETIC_DETECTIONS=false \
+    AI_MAX_FPS=0 \
     AI_SYNC_MODE=true \
     USE_BUFFER_POOL=false \
     ENCODER_THREADS=0 \
@@ -152,6 +153,7 @@ run_scenario "Optimized" \
     AI_MODEL_PATH="$MODEL_PATH" \
     AI_CONF_THRESHOLD=0.35 \
     SYNTHETIC_DETECTIONS=false \
+    AI_MAX_FPS=0 \
     AI_SYNC_MODE=false \
     USE_BUFFER_POOL=true \
     ENCODER_THREADS=2 \

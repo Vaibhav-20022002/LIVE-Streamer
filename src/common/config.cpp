@@ -279,6 +279,9 @@ Config load_config_from_map(const std::unordered_map<std::string, std::string> &
   if (auto *v = get_val("AI_SYNC_MODE")) {
     cfg.ai_sync_mode = parse_bool_or_throw("AI_SYNC_MODE", *v);
   }
+  if (auto *v = get_val("AI_MAX_FPS")) {
+    cfg.ai_max_fps = parse_float(*v);
+  }
   if (auto *v = get_val("USE_BUFFER_POOL")) {
     cfg.use_buffer_pool = parse_bool_or_throw("USE_BUFFER_POOL", *v);
   }
@@ -321,6 +324,7 @@ Config load_config(const std::string &dotenv_path) {
       "AI_CONF_THRESHOLD",
       "AI_THREADS",
       "AI_TARGET_CLASSES",
+      "AI_MAX_FPS",
       "AI_SYNC_MODE",
       "USE_BUFFER_POOL",
       "SYNTHETIC_DETECTIONS",
@@ -390,6 +394,9 @@ void validate_config(const Config &cfg) {
   }
   if (cfg.ai_threads < 0) {
     throw std::invalid_argument("Invalid ai_threads: must be >= 0");
+  }
+  if (cfg.ai_max_fps < 0.0f) {
+    throw std::invalid_argument("Invalid ai_max_fps: must be >= 0.0");
   }
   if (cfg.read_timeout_ms < 100) {
     throw std::invalid_argument("Invalid read_timeout_ms: must be >= 100");

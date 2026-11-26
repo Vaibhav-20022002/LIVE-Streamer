@@ -43,6 +43,7 @@ struct Config {
   int                             ai_threads        = 2;
   std::unordered_set<std::string> ai_target_classes =
       {"person", "car", "truck", "bicycle", "motorcycle", "bus"};
+  float ai_max_fps = 3.0f;
 
   bool ai_sync_mode         = false;
   bool use_buffer_pool      = true;

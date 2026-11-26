@@ -202,14 +202,15 @@ Variables loaded from `.env` (or process environment, which overrides `.env`):
 | `TRANSCODE_MODE` | `auto` | `auto` (remux when AI off and H.264/HEVC), `always`, or `remux`. |
 | `ENCODER_PRESET` | `ultrafast` | `libx264` preset. |
 | `ENCODER_BITRATE_KBPS` | `2000` | Target `libx264` bitrate in kbps. |
-| `ENCODER_THREADS` | `2` | `libx264` encoder thread count. |
+| `ENCODER_THREADS` | `1` (`.env.example`) / `2` (binary default) | `libx264` encoder thread count. |
 | `HLS_SEGMENT_DURATION` | `2` | Target HLS segment duration in seconds. |
 | `HLS_LIVE_LIST_SIZE` | `5` | Number of segments kept in `live.m3u8`. |
 | `PLAYBACK_RETENTION_SEC` | `1800` | Rolling DVR retention window in seconds. |
 | `AI_ENABLED` | `true` | Enable ONNX Runtime object detection and YUV overlay. |
 | `AI_MODEL_PATH` | `/opt/models/yolov8n.onnx` | Path to YOLOv8 `.onnx` model. |
 | `AI_CONF_THRESHOLD` | `0.35` | Minimum class confidence score. |
-| `AI_THREADS` | `2` | ONNX Runtime intra-op thread count. |
+| `AI_THREADS` | `1` (`.env.example`) / `2` (binary default) | ONNX Runtime intra-op thread count (`allow_spinning=0`). |
+| `AI_MAX_FPS` | `3` | Maximum async AI inference submissions per stream per second (`0` = unlimited). |
 | `AI_TARGET_CLASSES` | `person,car,truck,bicycle,motorcycle,bus` | Comma-separated COCO labels to detect (`*` for all). |
 | `AI_SYNC_MODE` | `false` | Run inference inline on pipeline thread (`true`) or async (`false`). |
 | `USE_BUFFER_POOL` | `true` | Recycle RGB inference buffers via `ByteBufferPool`. |

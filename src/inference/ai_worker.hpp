@@ -33,8 +33,11 @@ public:
   std::vector<Detection> latest_detections() const;
   std::string            backend_name() const { return backend_name_; }
   bool                   is_active() const { return active_; }
-  uint64_t               inference_count() const { return inference_count_.load(); }
-  uint64_t               dropped_jobs() const { return queue_.dropped_count(); }
+  bool                   can_accept_frame() const {
+    return running_.load() && !busy_.load(std::memory_order_relaxed) && queue_.size() == 0;
+  }
+  uint64_t inference_count() const { return inference_count_.load(); }
+  uint64_t dropped_jobs() const { return queue_.dropped_count(); }
 
 private:
   struct InferenceJob {
@@ -58,6 +61,7 @@ private:
   std::unique_ptr<Impl>              impl_;
   std::thread                        thread_;
   std::atomic<bool>                  running_{false};
+  std::atomic<bool>                  busy_{false};
   bool                               active_       = false;
   std::string                        backend_name_ = "disabled";
   std::atomic<uint64_t>              job_seq_{0};

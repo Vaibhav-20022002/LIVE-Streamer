@@ -131,9 +131,11 @@ LetterboxInfo letterbox_rgb_to_nchw(const uint8_t *rgb,
     out_nchw[i] = fill_val;
   }
 
-  float *r_plane = out_nchw;
-  float *g_plane = out_nchw + plane_size;
-  float *b_plane = out_nchw + 2 * plane_size;
+  float          *r_plane    = out_nchw;
+  float          *g_plane    = out_nchw + plane_size;
+  float          *b_plane    = out_nchw + 2 * plane_size;
+  const size_t    row_stride = static_cast<size_t>(src_w) * 3;
+  constexpr float kInv255    = 1.0f / 255.0f;
 
   for (int y = 0; y < new_h; ++y) {
     int dst_y = pad_y + y;
@@ -146,6 +148,12 @@ LetterboxInfo letterbox_rgb_to_nchw(const uint8_t *rgb,
     sy0           = std::clamp(sy0, 0, src_h - 1);
     sy1           = std::clamp(sy1, 0, src_h - 1);
 
+    const uint8_t *row0    = rgb + static_cast<size_t>(sy0) * row_stride;
+    const uint8_t *row1    = rgb + static_cast<size_t>(sy1) * row_stride;
+    const float    wy0     = (1.0f - fy) * kInv255;
+    const float    wy1     = fy * kInv255;
+    const size_t   dst_row = static_cast<size_t>(dst_y) * dst_w;
+
     for (int x = 0; x < new_w; ++x) {
       int dst_x = pad_x + x;
       if (dst_x < 0 || dst_x >= dst_w) continue;
@@ -157,29 +165,20 @@ LetterboxInfo letterbox_rgb_to_nchw(const uint8_t *rgb,
       sx0           = std::clamp(sx0, 0, src_w - 1);
       sx1           = std::clamp(sx1, 0, src_w - 1);
 
-      /// Assumes packed RGB24 input (3 bytes/pixel, stride = src_w * 3).
-      auto get_rgb = [&](int px, int py, int channel) {
-        size_t idx = static_cast<size_t>(py) * src_w * 3 + static_cast<size_t>(px) * 3 + channel;
-        return static_cast<float>(rgb[idx]) / 255.0f;
-      };
+      const float    wx0     = 1.0f - fx;
+      const uint8_t *p00     = row0 + static_cast<size_t>(sx0) * 3;
+      const uint8_t *p10     = row0 + static_cast<size_t>(sx1) * 3;
+      const uint8_t *p01     = row1 + static_cast<size_t>(sx0) * 3;
+      const uint8_t *p11     = row1 + static_cast<size_t>(sx1) * 3;
+      const float    w00     = wx0 * wy0;
+      const float    w10     = fx * wy0;
+      const float    w01     = wx0 * wy1;
+      const float    w11     = fx * wy1;
+      const size_t   dst_idx = dst_row + dst_x;
 
-      for (int c = 0; c < 3; ++c) {
-        float c00 = get_rgb(sx0, sy0, c);
-        float c10 = get_rgb(sx1, sy0, c);
-        float c01 = get_rgb(sx0, sy1, c);
-        float c11 = get_rgb(sx1, sy1, c);
-
-        float val = (1.0f - fx) * (1.0f - fy) * c00 + fx * (1.0f - fy) * c10 +
-            (1.0f - fx) * fy * c01 + fx * fy * c11;
-
-        size_t dst_idx = static_cast<size_t>(dst_y) * dst_w + dst_x;
-        if (c == 0)
-          r_plane[dst_idx] = val;
-        else if (c == 1)
-          g_plane[dst_idx] = val;
-        else
-          b_plane[dst_idx] = val;
-      }
+      r_plane[dst_idx] = w00 * p00[0] + w10 * p10[0] + w01 * p01[0] + w11 * p11[0];
+      g_plane[dst_idx] = w00 * p00[1] + w10 * p10[1] + w01 * p01[1] + w11 * p11[1];
+      b_plane[dst_idx] = w00 * p00[2] + w10 * p10[2] + w01 * p01[2] + w11 * p11[2];
     }
   }
 

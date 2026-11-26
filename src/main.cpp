@@ -196,14 +196,17 @@ void run_stream_pipeline(const streamer::Config &cfg,
 
   streamer::ExponentialBackoff backoff(cfg.reconnect_base_ms, cfg.reconnect_max_ms);
 
-  int         reconnect_epoch  = 0;
-  uint64_t    reconnect_count  = 0;
-  uint64_t    frames_processed = 0;
-  int         last_width       = cfg.source_width;
-  int         last_height      = cfg.source_height;
-  std::string last_mode        = "transcode";
-  double      last_fps_in      = 0.0;
-  double      last_fps_out     = 0.0;
+  int           reconnect_epoch   = 0;
+  uint64_t      reconnect_count   = 0;
+  uint64_t      frames_processed  = 0;
+  int           last_width        = cfg.source_width;
+  int           last_height       = cfg.source_height;
+  std::string   last_mode         = "transcode";
+  double        last_fps_in       = 0.0;
+  double        last_fps_out      = 0.0;
+  int64_t       last_ai_submit_ms = 0;
+  const int64_t ai_min_interval_ms =
+      (cfg.ai_max_fps > 0.0f) ? static_cast<int64_t>(1000.0f / cfg.ai_max_fps) : 0;
 
   auto publish_stats = [&](const std::string &state,
                            const std::string &mode,
@@ -379,8 +382,11 @@ void run_stream_pipeline(const streamer::Config &cfg,
             break;
           }
 
-          if (!transcode.sws_yuv) {
-            const AVPixelFormat src_fmt = static_cast<AVPixelFormat>(transcode.dec_frame->format);
+          const AVPixelFormat src_fmt = static_cast<AVPixelFormat>(transcode.dec_frame->format);
+          const bool          direct_yuv420p = (src_fmt == AV_PIX_FMT_YUV420P &&
+              transcode.dec_frame->width == out_w && transcode.dec_frame->height == out_h);
+
+          if (!direct_yuv420p && !transcode.sws_yuv) {
             transcode.sws_yuv.reset(sws_getContext(transcode.dec_frame->width,
                 transcode.dec_frame->height,
                 src_fmt,
@@ -391,46 +397,63 @@ void run_stream_pipeline(const streamer::Config &cfg,
                 nullptr,
                 nullptr,
                 nullptr));
-            if (ai_worker.is_active()) {
-              transcode.sws_rgb.reset(sws_getContext(transcode.dec_frame->width,
-                  transcode.dec_frame->height,
-                  src_fmt,
-                  out_w,
-                  out_h,
-                  AV_PIX_FMT_RGB24,
-                  SWS_FAST_BILINEAR,
-                  nullptr,
-                  nullptr,
-                  nullptr));
-            }
+          }
+          if (ai_worker.is_active() && !transcode.sws_rgb) {
+            transcode.sws_rgb.reset(sws_getContext(transcode.dec_frame->width,
+                transcode.dec_frame->height,
+                src_fmt,
+                out_w,
+                out_h,
+                AV_PIX_FMT_RGB24,
+                SWS_FAST_BILINEAR,
+                nullptr,
+                nullptr,
+                nullptr));
           }
 
           av_frame_make_writable(transcode.yuv_frame.get());
-          sws_scale(transcode.sws_yuv.get(),
-              transcode.dec_frame->data,
-              transcode.dec_frame->linesize,
-              0,
-              transcode.dec_frame->height,
-              transcode.yuv_frame->data,
-              transcode.yuv_frame->linesize);
-
-          if (ai_worker.is_active() && transcode.sws_rgb) {
-            av_frame_make_writable(transcode.rgb_frame.get());
-            sws_scale(transcode.sws_rgb.get(),
+          if (direct_yuv420p) {
+            av_frame_copy(transcode.yuv_frame.get(), transcode.dec_frame.get());
+          } else {
+            sws_scale(transcode.sws_yuv.get(),
                 transcode.dec_frame->data,
                 transcode.dec_frame->linesize,
                 0,
                 transcode.dec_frame->height,
-                transcode.rgb_frame->data,
-                transcode.rgb_frame->linesize);
+                transcode.yuv_frame->data,
+                transcode.yuv_frame->linesize);
+          }
 
+          if (ai_worker.is_active() && transcode.sws_rgb) {
             std::vector<streamer::Detection> dets;
             if (cfg.ai_sync_mode) {
+              av_frame_make_writable(transcode.rgb_frame.get());
+              sws_scale(transcode.sws_rgb.get(),
+                  transcode.dec_frame->data,
+                  transcode.dec_frame->linesize,
+                  0,
+                  transcode.dec_frame->height,
+                  transcode.rgb_frame->data,
+                  transcode.rgb_frame->linesize);
               dets = ai_worker.infer_sync(
                   transcode.rgb_frame->data[0], transcode.rgb_frame->linesize[0], out_w, out_h);
             } else {
-              ai_worker.submit_rgb_frame(
-                  transcode.rgb_frame->data[0], transcode.rgb_frame->linesize[0], out_w, out_h);
+              const int64_t frame_now_ms = streamer::now_steady_ms();
+              const bool    due          = (ai_min_interval_ms == 0) || (last_ai_submit_ms == 0) ||
+                  ((frame_now_ms - last_ai_submit_ms) >= ai_min_interval_ms);
+              if (due && ai_worker.can_accept_frame()) {
+                av_frame_make_writable(transcode.rgb_frame.get());
+                sws_scale(transcode.sws_rgb.get(),
+                    transcode.dec_frame->data,
+                    transcode.dec_frame->linesize,
+                    0,
+                    transcode.dec_frame->height,
+                    transcode.rgb_frame->data,
+                    transcode.rgb_frame->linesize);
+                ai_worker.submit_rgb_frame(
+                    transcode.rgb_frame->data[0], transcode.rgb_frame->linesize[0], out_w, out_h);
+                last_ai_submit_ms = frame_now_ms;
+              }
               dets = ai_worker.latest_detections();
             }
 
